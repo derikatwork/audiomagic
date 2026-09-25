@@ -31,6 +31,8 @@ class Server:
         self.port = port
         self.token = secrets.token_urlsafe(24)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="engine")
+        # waveform data is read-only and can be slow for long takes: keep it off the engine thread
+        self.peaks_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="peaks")
         self.clients = set()
         self.loop = None
         self.runner = None
@@ -116,6 +118,7 @@ class Server:
         r.add_get("/api/takes/{id}/peaks/{track}", self.h_peaks)
         r.add_get("/api/export/options", self.h_export_options)
         r.add_post("/api/export", self.h_export)
+        r.add_get("/api/export/{job}", self.h_export_status)
         r.add_post("/api/export/{job}/cancel", self.h_export_cancel)
         r.add_post("/api/open-folder", self.h_open_folder)
         return app
@@ -224,7 +227,9 @@ class Server:
         return web.json_response({"ok": True})
 
     async def h_peaks(self, request):
-        data = await self.call(self.engine.peaks, request.match_info["id"], request.match_info["track"])
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(self.peaks_executor, self.engine.peaks,
+                                          request.match_info["id"], request.match_info["track"])
         return web.Response(body=data, content_type="application/octet-stream",
                             headers={"Cache-Control": "no-store"})
 
@@ -237,6 +242,12 @@ class Server:
         opts = {k: b[k] for k in ("format", "quality", "what", "channels", "normalize", "tags", "folder", "track_ids")
                 if k in b}
         return web.json_response({"job": await self.call(self.engine.start_export, take, opts)})
+
+    async def h_export_status(self, request):
+        info = self.engine.jobs.get(request.match_info["job"])
+        if info is None:
+            raise UserError("No such export")
+        return web.json_response({k: v for k, v in info.items() if k != "job"})
 
     async def h_export_cancel(self, request):
         await self.call(self.engine.cancel_export, request.match_info["job"])
@@ -273,19 +284,20 @@ class Server:
         text = json.dumps(payload)
         for ws in list(self.clients):
             try:
-                await ws.send_str(text)
-            except (ConnectionError, RuntimeError):
+                # a stuck client must not hold up everyone else
+                await asyncio.wait_for(ws.send_str(text), timeout=2)
+            except (ConnectionError, RuntimeError, asyncio.TimeoutError):
                 self.clients.discard(ws)
+                asyncio.ensure_future(ws.close())
 
     async def pump(self):
-        """Meters at ~25 fps, state and events when they change."""
+        """Meters at ~25 fps, plus events. Never waits for the engine thread,
+        so meters keep moving while a slow operation runs."""
         tick = 0
         while True:
             await asyncio.sleep(0.04)
             tick += 1
             try:
-                if tick % 3 == 0:
-                    await self.call(self.engine.poll)
                 await self.broadcast(self.engine.meters())
                 if tick % 3 == 0:
                     peaks = self.engine.rec_peaks()
@@ -293,12 +305,23 @@ class Server:
                         await self.broadcast({"type": "recpeaks", "tracks": peaks})
                 for ev in self.engine.pop_events():
                     await self.broadcast(ev)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("update loop failed")
+
+    async def housekeeping(self):
+        """Engine upkeep and state updates, on the engine thread."""
+        while True:
+            await asyncio.sleep(0.1)
+            try:
+                await self.call(self.engine.poll)
                 if self.engine.take_dirty():
                     await self.broadcast({"type": "state", "state": await self.call(self.engine.state)})
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("update loop failed")
+                log.exception("housekeeping failed")
 
     # ------------------------------------------------------------ lifecycle
     def start_in_thread(self):
@@ -319,10 +342,11 @@ class Server:
         await site.start()
         self.port = site._server.sockets[0].getsockname()[1]
         self._stopping = asyncio.Event()
-        pump = asyncio.ensure_future(self.pump())
+        tasks = [asyncio.ensure_future(self.pump()), asyncio.ensure_future(self.housekeeping())]
         self._ready.set()
         await self._stopping.wait()
-        pump.cancel()
+        for t in tasks:
+            t.cancel()
         for ws in list(self.clients):
             await ws.close()
         await self.runner.cleanup()
@@ -332,4 +356,6 @@ class Server:
             self.loop.call_soon_threadsafe(self._stopping.set)
         if self._thread is not None:
             self._thread.join(timeout=5)
-        self.executor.shutdown(wait=False)
+        # let an engine call that is already running (e.g. stopping a recording) finish
+        self.executor.shutdown(wait=True, cancel_futures=True)
+        self.peaks_executor.shutdown(wait=False, cancel_futures=True)

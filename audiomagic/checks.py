@@ -16,6 +16,7 @@ MODULES = [
 ELEMENTS = [
     ("pipewiresrc", "gstreamer1.0-pipewire", True),
     ("pipewiresink", "gstreamer1.0-pipewire", True),
+    ("pulsesink", "gstreamer1.0-plugins-good", False),
     ("appsink", "gstreamer1.0-plugins-base", True),
     ("audioconvert", "gstreamer1.0-plugins-base", True),
     ("uridecodebin", "gstreamer1.0-plugins-base", False),
@@ -55,6 +56,14 @@ def run_checks():
                     version = line.split('"')[1]
                     info.append(f"PipeWire {version}")
                     break
+            try:
+                from .output import pulse_available
+                if not pulse_available():
+                    warnings.append("PipeWire's PulseAudio service is not running. Playback and monitoring still "
+                                    "work, but with PipeWire 1.0 they can occasionally freeze the app: "
+                                    + APT_HINT.format("pipewire-pulse"))
+            except (ImportError, ValueError):
+                pass
     if shutil.which("ffmpeg") is None:
         warnings.append(f"ffmpeg is missing, so exporting won't work: {APT_HINT.format('ffmpeg')}")
     try:

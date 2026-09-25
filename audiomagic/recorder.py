@@ -5,8 +5,11 @@ the time T0 and each track begins at the sample captured at T0 (using the
 BlockClock estimate), so tracks from different devices line up.
 
 Inputs that PipeWire keeps in lockstep (microphones, interfaces, apps) are
-then simply appended. Inputs with their own clock (internet streams, SRT,
-test tone) are nudged back into line if they drift by more than 50 ms.
+then simply appended. If one of them loses audio (a USB hiccup, an overloaded
+machine) and falls more than 50 ms behind the inputs from other devices, the
+gap is filled with silence so it stays in sync for the rest of the take.
+Inputs with their own clock (internet streams, SRT, test tone) are nudged
+back into line if they drift by more than 50 ms either way.
 """
 
 import os
@@ -37,9 +40,11 @@ class RecTrack:
         self.done = False
         self.closed = False
         self.generation = None
+        self.capture_key = None
         self.written = 0
         self.last_end_ns = None
         self.error = None
+        self.filled_gaps = 0
 
     def _write(self, x):
         if x.shape[0] and self.error is None:
@@ -78,6 +83,7 @@ class RecTrack:
                     x = x[min(x.shape[0], self.written - target):]
                     target = self.written
                 self.generation = capture.generation
+                self.capture_key = capture.key
                 self._pad(target - self.written)
             elif not self.graph_synced:
                 target = rec.timeline_frame(t0, exclude=self)
@@ -86,6 +92,14 @@ class RecTrack:
                     self._pad(diff)
                 elif diff < -GAP:
                     x = x[min(x.shape[0], -diff):]
+            else:
+                target = rec.graph_reference(t0, self.capture_key)
+                if target is not None and target - self.written > GAP:
+                    # this device lost audio: fill the hole so it stays in sync with the others
+                    self.filled_gaps += 1
+                    log.warning("input for %s lost %.0f ms of audio; filled with silence to stay in sync",
+                                self.track_id, (target - self.written) * 1000 / SAMPLE_RATE)
+                    self._pad(target - self.written)
             stop = rec.stop_frame
             if stop is not None:
                 remaining = stop - self.written
@@ -103,13 +117,22 @@ class RecTrack:
                 return
             if total is not None and self.written < total:
                 self._pad(total - self.written)
+            elif total is not None and self.written > total:
+                try:
+                    self.writer.truncate(total)
+                    self.written = total
+                except OSError as e:
+                    log.error("could not trim %s: %s", self.path, e)
             try:
                 self.writer.close()
             except OSError as e:
                 log.error("closing %s failed: %s", self.path, e)
             self.closed = True
         try:
-            peaks_mod.save(self.path, self.peaks.all())
+            pk = self.peaks.all()
+            if total is not None:
+                pk = pk[:-(-total // peaks_mod.BIN)]
+            peaks_mod.save(self.path, pk)
         except OSError as e:
             log.warning("could not save waveform cache: %s", e)
 
@@ -142,6 +165,20 @@ class Recorder:
                 best = t
         if best is None:
             return self.frame_at(t_ns)
+        return best.written + int(round((t_ns - best.last_end_ns) * SAMPLE_RATE / 1e9))
+
+    def graph_reference(self, t_ns, capture_key):
+        """Where time t falls on the take according to PipeWire inputs from
+        *other* devices, or None if there are none to compare with."""
+        best = None
+        for t in self.tracks.values():
+            if (not t.graph_synced or not t.started or t.last_end_ns is None
+                    or t.capture_key == capture_key):
+                continue
+            if best is None or t.written > best.written:
+                best = t
+        if best is None:
+            return None
         return best.written + int(round((t_ns - best.last_end_ns) * SAMPLE_RATE / 1e9))
 
     def elapsed_frames(self):

@@ -59,6 +59,66 @@ def trash(path):
     shutil.move(path, os.path.join(fallback, f"{int(time.time())}-{os.path.basename(path)}"))
 
 
+class LiveProcessor(threading.Thread):
+    """Runs effects, meters and monitoring for every track, one block at a time.
+
+    Recording never waits for this: input threads only hand blocks over. If
+    effects can't keep up (too many tracks for this computer), the oldest
+    blocks are skipped, so meters and monitoring stutter but recordings stay
+    perfect.
+    """
+
+    MAX_AGE = 0.25  # seconds a block may wait before it is skipped
+
+    def __init__(self):
+        super().__init__(name="live-effects", daemon=True)
+        self._q = deque()
+        self._wake = threading.Event()
+        self._stop = False
+        self.skipped = 0
+        self.last_skip = 0.0
+        self.busy = 0.0       # fraction of time spent processing (smoothed)
+
+    def submit(self, rt, block):
+        self._q.append((time.monotonic(), rt, block))
+        self._wake.set()
+
+    def stop(self):
+        self._stop = True
+        self._wake.set()
+
+    @property
+    def overloaded(self):
+        return time.monotonic() - self.last_skip < 3.0
+
+    def run(self):
+        q = self._q
+        t_idle = time.perf_counter()
+        while not self._stop:
+            if not q:
+                self._wake.wait(0.2)
+                self._wake.clear()
+                continue
+            t_start = time.perf_counter()
+            idle = t_start - t_idle
+            n = 0
+            while q and not self._stop:
+                t_in, rt, block = q.popleft()
+                if time.monotonic() - t_in > self.MAX_AGE:
+                    self.skipped += 1
+                    self.last_skip = time.monotonic()
+                    continue
+                try:
+                    rt.process_live(block)
+                except Exception:
+                    log.exception("live effects failed for %s", rt.track.name)
+                n += 1
+            t_idle = time.perf_counter()
+            work = t_idle - t_start
+            if work + idle > 0:
+                self.busy = 0.95 * self.busy + 0.05 * (work / (work + idle))
+
+
 class TrackRuntime:
     """Live state for one track: channel routing, effects, meter, monitor."""
 
@@ -75,10 +135,15 @@ class TrackRuntime:
         self.rec = None
 
     def on_block(self, block, t0, capture):
+        """Input thread: record the raw audio, hand the rest to the live processor."""
         x = block if self.channel_map is None else block[:, self.channel_map]
         rec = self.rec
         if rec is not None:
             rec.feed(x, t0, capture)
+        self.engine.live.submit(self, x)
+
+    def process_live(self, x):
+        """Live-processor thread: effects, level meter and monitoring."""
         tr = self.track
         if tr.fx is not self._fx_seen:
             self.dsp.configure(tr.fx)
@@ -121,6 +186,11 @@ class Engine:
         self._sources_dirty = False
         self._events = deque()
         self._closing = False
+        self._save_at = None
+        self._stop_lock = threading.Lock()
+        self.live = LiveProcessor()
+        self.live.start()
+        self._overloaded = False
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -165,12 +235,25 @@ class Engine:
             self.captures.clear()
             if self.project is not None:
                 self.project.save()
+                self._save_at = None
         if self.watcher is not None:
             self.watcher.stop()
+        self.live.stop()
 
     # --------------------------------------------------------------- events
     def _mark_dirty(self, *_):
         self._dirty = True
+
+    def _save_soon(self):
+        """Save within a second. Used for mixer tweaks (a slider drag sends
+        many small changes) so the project file isn't rewritten for each one."""
+        if self._save_at is None:
+            self._save_at = time.monotonic() + 1.0
+
+    def _flush_save(self):
+        if self._save_at is not None and self.project is not None:
+            self._save_at = None
+            self.project.save()
 
     def take_dirty(self):
         d, self._dirty = self._dirty, False
@@ -213,6 +296,7 @@ class Engine:
     # ------------------------------------------------------------- projects
     def _load_project(self, project):
         with self.lock:
+            self._flush_save()
             self.player.stop()
             for rt in self.runtimes.values():
                 rt.stop_monitor()
@@ -231,7 +315,10 @@ class Engine:
     def list_projects(self):
         out = self.store.list()
         for p in out:
-            p["current"] = bool(self.project and os.path.samefile(p["path"], self.project.path))
+            try:
+                p["current"] = bool(self.project and os.path.samefile(p["path"], self.project.path))
+            except OSError:
+                p["current"] = False
         return {"root": self.store.root, "projects": out}
 
     def create_project(self, name, copy_inputs=False):
@@ -367,8 +454,15 @@ class Engine:
     def audible(self, track):
         return not track.mute and (track.solo or not self._any_solo)
 
-    def _update_monitors(self):
+    def _output_target(self):
+        """The chosen output, or None (the system default) if it isn't connected right now."""
         target = self.settings.get("output")
+        if target and self.graph.ok and not any(n.name == target for n in self.graph.sinks()):
+            return None
+        return target or None
+
+    def _update_monitors(self):
+        target = self._output_target()
         for rt in self.runtimes.values():
             want = rt.track.monitor and not self._closing
             if want and rt.monitor is None:
@@ -479,10 +573,11 @@ class Engine:
                 tr.source = self._clean_source(changes["source"])
                 rebuild = True
             self._any_solo = any(t.solo for t in self.project.tracks)
-            self.project.save()
             if rebuild:
+                self.project.save()
                 self._rebuild_routes()
             else:
+                self._save_soon()
                 self._update_monitors()
         self._dirty = True
 
@@ -555,7 +650,7 @@ class Engine:
         with self.lock:
             self.project.master_gain_db = float(clamp(float(gain_db), -60.0, 12.0))
             self.master_lin = db_to_lin(self.project.master_gain_db)
-            self.project.save()
+            self._save_soon()
         self._dirty = True
 
     def set_output(self, node):
@@ -564,6 +659,11 @@ class Engine:
             for rt in self.runtimes.values():
                 rt.stop_monitor()
             self._update_monitors()
+            player = self.player
+            if player.state == "playing" and player.take_id:
+                # move playback to the new output, carrying on from the same spot
+                pos = (player.position() or 0) / SAMPLE_RATE
+                self.play(player.take_id, pos)
         self._dirty = True
 
     # ------------------------------------------------------------ recording
@@ -601,6 +701,10 @@ class Engine:
         return take.id
 
     def stop_recording(self):
+        with self._stop_lock:
+            return self._stop_recording()
+
+    def _stop_recording(self):
         rec, take = self.recorder, self.rec_take
         if rec is None:
             return None
@@ -631,7 +735,7 @@ class Engine:
         take = self._take(take_id)
         ok = self.player.play(self.project, take, int(max(0.0, float(pos)) * SAMPLE_RATE),
                               include=self.audible, master=lambda: self.master_lin,
-                              target=self.settings.get("output"))
+                              target=self._output_target())
         self._dirty = True
         return ok
 
@@ -807,6 +911,14 @@ class Engine:
 
     # --------------------------------------------------------- housekeeping
     def poll(self):
+        if self.live.overloaded != self._overloaded:
+            self._overloaded = self.live.overloaded
+            self._dirty = True
+            if self._overloaded:
+                log.warning("live effects are falling behind; monitoring may stutter (recording is unaffected)")
+        if self._save_at is not None and time.monotonic() >= self._save_at:
+            with self.lock:
+                self._flush_save()
         rec = self.recorder
         if rec is not None:
             failed = [t for t in rec.tracks.values() if t.error]
@@ -901,5 +1013,6 @@ class Engine:
                 "outputs": [{"node": n.name, "label": n.description} for n in self.graph.sinks()] if self.graph.ok else [],
                 "disk": {"free": free, "bytes_per_sec": armed_ch * 3 * SAMPLE_RATE},
                 "pipewire": {"ok": self.graph.ok, "error": self.graph.error},
+                "effects_overloaded": self.live.overloaded,
                 "presets": sorted(FX_PRESETS),
             }

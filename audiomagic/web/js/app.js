@@ -147,8 +147,11 @@ class App {
       $('#master-gain').value = st.project.master_gain_db;
       $('#master-val').textContent = fmtDb(st.project.master_gain_db);
     }
-    if (!st.pipewire.ok) $('#status').textContent = `PipeWire problem: ${st.pipewire.error || 'not reachable'}`;
-    else $('#status').textContent = '';
+    const status = $('#status');
+    if (!st.pipewire.ok) status.textContent = `PipeWire problem: ${st.pipewire.error || 'not reachable'}`;
+    else if (st.effects_overloaded) status.textContent = 'Effects are using more CPU than this computer has: meters and monitoring may stutter. Recording is not affected. Turning off noise suppression on some tracks helps.';
+    else status.textContent = '';
+    status.classList.toggle('warn', !!st.effects_overloaded);
     this.fire('state', st);
   }
 

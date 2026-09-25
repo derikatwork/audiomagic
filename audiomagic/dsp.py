@@ -36,6 +36,18 @@ EQ_MID_HZ = 2500.0
 EQ_HIGH_HZ = 8000.0
 
 
+def across_channels(x, op):
+    """Combine the channels of an (n, ch) block with a ufunc such as np.maximum.
+
+    Much faster than x.max(axis=1) and friends, which crawl along the short
+    channel axis.
+    """
+    out = x[:, 0].copy()
+    for c in range(1, x.shape[1]):
+        op(out, x[:, c], out=out)
+    return out
+
+
 def merge_fx(fx):
     """Fill any missing keys in a stored fx dict from the defaults."""
     out = copy.deepcopy(DEFAULT_FX)
@@ -149,23 +161,25 @@ class NoiseSuppressor:
     def __init__(self, channels, strength=0.5):
         n = self.N
         self.channels = channels
-        self.win = np.sqrt(np.hanning(n + 1)[:n]).astype(np.float64)[:, None]
+        self.win = np.sqrt(np.hanning(n + 1)[:n])
         self.set_strength(strength)
         self._reset_buffers()
         bins = n // 2 + 1
+        shape = (channels, bins)
         self.S = None
-        self.sub_min = np.full((bins, channels), np.inf)
+        self.sub_min = np.full(shape, np.inf)
         self.hist = deque(maxlen=self.NSUB)
+        self.hist_min = np.full(shape, np.inf)
         self.sub_count = 0
-        self.G_prev = np.ones((bins, channels))
-        self.gamma_prev = np.ones((bins, channels))
+        self.G_prev = np.ones(shape)
+        self.gamma_prev = np.ones(shape)
         self.noise = None
 
     def _reset_buffers(self):
         n, h = self.N, self.H
         self.inbuf = np.zeros((n - h, self.channels))
         self.outbuf = np.zeros((h, self.channels))
-        self.ola = np.zeros((n, self.channels))
+        self.carry = np.zeros((self.channels, h))
 
     def set_strength(self, s):
         s = min(1.0, max(0.0, float(s)))
@@ -174,26 +188,30 @@ class NoiseSuppressor:
         self.oversub = 1.0 + s
 
     def _gain(self, P):
+        """Suppression gain for one frame; P is the power spectrum, shape (channels, bins)."""
         if self.S is None:
             self.S = P.copy()
         else:
-            self.S = self.SMOOTH * self.S + (1 - self.SMOOTH) * P
+            self.S *= self.SMOOTH
+            self.S += (1 - self.SMOOTH) * P
         np.minimum(self.sub_min, self.S, out=self.sub_min)
         self.sub_count += 1
         if self.sub_count >= self.SUBWIN:
-            self.hist.append(self.sub_min.copy())
+            self.hist.append(self.sub_min)
+            self.hist_min = np.minimum.reduce(list(self.hist))
             self.sub_min = self.S.copy()
             self.sub_count = 0
-        pmin = self.sub_min
-        for h in self.hist:
-            pmin = np.minimum(pmin, h)
-        self.noise = pmin * self.BIAS + 1e-12
+        self.noise = np.minimum(self.sub_min, self.hist_min)
+        self.noise *= self.BIAS
+        self.noise += 1e-12
         gamma = P / (self.noise * self.oversub)
-        xi = self.DD * (self.G_prev ** 2) * self.gamma_prev + (1 - self.DD) * np.maximum(gamma - 1.0, 0.0)
+        xi = np.maximum(gamma - 1.0, 0.0)
+        xi *= 1 - self.DD
+        xi += self.DD * np.square(self.G_prev) * self.gamma_prev
         G = xi / (1.0 + xi)
-        G = np.maximum(G, self.floor)
+        np.maximum(G, self.floor, out=G)
         # light smoothing across frequency reduces "musical noise"
-        G[1:-1] = 0.25 * G[:-2] + 0.5 * G[1:-1] + 0.25 * G[2:]
+        G[:, 1:-1] = 0.25 * (G[:, :-2] + G[:, 2:]) + 0.5 * G[:, 1:-1]
         self.G_prev = G
         self.gamma_prev = gamma
         return G
@@ -201,24 +219,25 @@ class NoiseSuppressor:
     def process(self, x):
         n_in = x.shape[0]
         N, H = self.N, self.H
-        self.inbuf = np.concatenate([self.inbuf, x.astype(np.float64)])
-        outs = []
-        pos = 0
-        while self.inbuf.shape[0] - pos >= N:
-            frame = self.inbuf[pos:pos + N] * self.win
-            X = np.fft.rfft(frame, axis=0)
+        buf = np.concatenate([self.inbuf, x.astype(np.float64)])
+        nframes = (buf.shape[0] - N) // H + 1 if buf.shape[0] >= N else 0
+        if nframes:
+            # all complete frames at once: shape (frames, channels, N)
+            frames = np.lib.stride_tricks.sliding_window_view(buf, N, axis=0)[::H][:nframes] * self.win
+            X = np.fft.rfft(frames, axis=-1)
             P = X.real ** 2 + X.imag ** 2
-            Y = X * self._gain(P)
-            y = np.fft.irfft(Y, n=N, axis=0) * self.win
-            self.ola += y
-            outs.append(self.ola[:H].copy())
-            self.ola[:-H] = self.ola[H:]
-            self.ola[-H:] = 0
-            pos += H
-        if pos:
-            self.inbuf = self.inbuf[pos:]
-        if outs:
-            self.outbuf = np.concatenate([self.outbuf] + outs)
+            for f in range(nframes):
+                X[f] *= self._gain(P[f])
+            y = np.fft.irfft(X, n=N, axis=-1) * self.win
+            # 50% overlap-add: each hop = first half of this frame + second half of the previous one
+            first, second = y[:, :, :H], y[:, :, H:]
+            prev = np.concatenate([self.carry[None], second[:-1]])
+            hops = first + prev
+            self.carry = second[-1].copy()
+            out_new = hops.transpose(0, 2, 1).reshape(-1, self.channels)
+            self.outbuf = np.concatenate([self.outbuf, out_new])
+            buf = buf[nframes * H:]
+        self.inbuf = buf
         out = self.outbuf[:n_in]
         self.outbuf = self.outbuf[n_in:]
         return out.astype(np.float32)
@@ -259,7 +278,7 @@ class Gate:
         sub = self.SUB
         nsub = -(-n // sub)
         pad = nsub * sub - n
-        a = np.abs(x).max(axis=1)
+        a = across_channels(np.abs(x), np.maximum)
         if pad:
             a = np.concatenate([a, np.zeros(pad, dtype=a.dtype)])
         peaks = a.reshape(nsub, sub).max(axis=1).tolist()
@@ -370,7 +389,7 @@ def to_stereo(x, pan):
 def to_mono(x):
     if x.shape[1] == 1:
         return x
-    return x.mean(axis=1, keepdims=True)
+    return (across_channels(x, np.add) * (1.0 / x.shape[1]))[:, None]
 
 
 class Meter:

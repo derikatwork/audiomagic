@@ -39,7 +39,12 @@ export class Timeline {
     this.drag = null;
     this.colors = {};
     this.readColors();
-    new ResizeObserver(() => this.layout()).observe(this.scroll);
+    this.viewW = this.scroll.clientWidth;
+    this._dims = {};
+    new ResizeObserver((entries) => {
+      this.viewW = entries[0].contentRect.width;
+      this.layout();
+    }).observe(this.scroll);
     this.scroll.addEventListener('scroll', () => { this.baseDirty = true; this.overDirty = true; });
     this.scroll.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.over.addEventListener('pointerdown', (e) => this.onDown(e));
@@ -94,6 +99,8 @@ export class Timeline {
     }
     this.cursor = clamp(this.cursor, 0, this.lengthSec);
     this.layout();
+    // while recording, new waveform data (appendPeaks) triggers the redraws
+    if (!this.live || takeChanged || finishedRecording) this.baseDirty = true;
   }
 
   setPeaks(takeId, trackId, arr) {
@@ -124,26 +131,38 @@ export class Timeline {
 
   // ---------------------------------------------------------------- layout
   layout() {
-    const w = Math.max(200, this.scroll.clientWidth);
-    this.width = w;
+    // Only touch the page when a size really changes: this runs on every
+    // meter update while recording.
+    const w = Math.max(200, Math.floor(this.viewW));
     const h = RULER_H + Math.max(1, this.tracks.length) * ROW_H;
     const contentW = Math.max(w, Math.ceil(this.lengthSec * this.pps) + 160);
-    this.inner.style.width = `${contentW}px`;
-    this.inner.style.height = `${h}px`;
-    this.scroll.style.height = `${h + (contentW > w ? 14 : 0)}px`;
-    this.stack.style.width = `${w}px`;
-    this.stack.style.height = `${h}px`;
+    const d = this._dims;
+    if (d.contentW !== contentW) {
+      this.inner.style.width = `${contentW}px`;
+      d.contentW = contentW;
+    }
+    const scrollH = h + (contentW > w ? 14 : 0);
+    if (d.scrollH !== scrollH) {
+      this.scroll.style.height = `${scrollH}px`;
+      d.scrollH = scrollH;
+    }
     const dpr = window.devicePixelRatio || 1;
-    for (const c of [this.base, this.over]) {
-      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    if (d.w !== w || d.h !== h || d.dpr !== dpr) {
+      this.inner.style.height = `${h}px`;
+      this.stack.style.width = `${w}px`;
+      this.stack.style.height = `${h}px`;
+      for (const c of [this.base, this.over]) {
         c.width = Math.round(w * dpr);
         c.height = Math.round(h * dpr);
+        c.style.width = `${w}px`;
+        c.style.height = `${h}px`;
       }
-      c.style.width = `${w}px`;
-      c.style.height = `${h}px`;
+      Object.assign(d, { w, h, dpr });
+      this.baseDirty = true;
+      this.overDirty = true;
     }
+    this.width = w;
     this.height = h;
-    this.baseDirty = true;
   }
 
   minPps() { return Math.min(2, (this.width - 60) / Math.max(1, this.lengthSec)); }
@@ -153,6 +172,7 @@ export class Timeline {
     this.pps = clamp(pps, this.minPps(), 4000);
     this.layout();
     this.scroll.scrollLeft = Math.max(0, t * this.pps - anchorX);
+    this.baseDirty = true;
   }
 
   zoomBy(f, anchorX) { this.setZoom(this.pps * f, anchorX); }
@@ -161,6 +181,7 @@ export class Timeline {
     const len = Math.max(this.lengthSec, 5);
     this.pps = clamp((this.width - 60) / len, 0.02, 4000);
     this.layout();
+    this.baseDirty = true;
     this.scroll.scrollLeft = 0;
   }
 

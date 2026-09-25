@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
@@ -61,11 +62,11 @@ def codec_args(fmt, quality):
     raise ExportError(f"unknown format {fmt}")
 
 
-def unique_path(folder, name, ext):
+def unique_path(folder, name, ext, taken=()):
     base = safe_dirname(name)
     path = os.path.join(folder, f"{base}.{ext}")
     n = 2
-    while os.path.exists(path):
+    while os.path.exists(path) or path in taken:
         path = os.path.join(folder, f"{base} ({n}).{ext}")
         n += 1
     return path
@@ -75,14 +76,22 @@ def _raw_input(raw, channels):
     return ["-f", "f32le", "-ar", str(SAMPLE_RATE), "-ac", str(channels), "-i", raw]
 
 
-def measure_loudness(raw, channels, lufs, tp):
-    cmd = [ffmpeg_path(), "-hide_banner", "-nostats", "-y"] + _raw_input(raw, channels) + [
+def loudness_cmd(raw, channels, lufs, tp):
+    return [ffmpeg_path(), "-hide_banner", "-nostats", "-y"] + _raw_input(raw, channels) + [
         "-af", f"loudnorm=I={lufs}:TP={tp}:LRA=11:print_format=json", "-f", "null", "-"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", r.stderr, re.S)
+
+
+def parse_loudness(stderr):
+    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", stderr, re.S)
     if not m:
         raise ExportError("could not measure loudness")
     return json.loads(m.group(0))
+
+
+def bytes_needed(frames, channels, fmt):
+    """Rough disk space for an export: float temp files plus the finished files."""
+    temp = frames * 4 * channels
+    return int(temp * (1.8 if fmt in ("flac", "wav") else 1.1)) + 64 * 1024 * 1024
 
 
 class ExportJob:
@@ -93,14 +102,44 @@ class ExportJob:
         self.opts = opts
         self.on_progress = on_progress or (lambda *a: None)
         self.cancelled = threading.Event()
-        self._proc = None
+        self._stop = threading.Event()  # cancelled, or another file failed
+        self._lock = threading.Lock()
+        self._procs = set()
         self.files = []
 
     def cancel(self):
         self.cancelled.set()
-        p = self._proc
-        if p is not None and p.poll() is None:
-            p.kill()
+        self._halt()
+
+    def _halt(self):
+        self._stop.set()
+        with self._lock:
+            procs = list(self._procs)
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+
+    def _ffmpeg(self, cmd):
+        """Run ffmpeg at low priority (recording and the UI come first); returns its stderr."""
+        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        with self._lock:
+            self._procs.add(p)
+        try:
+            try:
+                os.setpriority(os.PRIO_PROCESS, p.pid, 10)
+            except OSError:
+                pass
+            if self._stop.is_set():
+                p.kill()
+            _, err = p.communicate()
+        finally:
+            with self._lock:
+                self._procs.discard(p)
+        if self._stop.is_set():
+            raise ExportError("cancelled")
+        if p.returncode != 0:
+            raise ExportError(f"ffmpeg failed: {err.strip()[-400:]}")
+        return err
 
     def _progress(self, frac, msg):
         self.on_progress(max(0.0, min(1.0, frac)), msg)
@@ -118,7 +157,10 @@ class ExportJob:
         norm = NORMALIZE.get(o.get("normalize", "off"), NORMALIZE["off"])
         folder = os.path.expanduser(o.get("folder") or os.path.join(self.project.path, "exports"))
         os.makedirs(folder, exist_ok=True)
-        included = [t for t in self.tracks if t.id in set(o.get("track_ids") or [t.id for t in self.tracks])]
+        wanted = o.get("track_ids")
+        if wanted is None:
+            wanted = [t.id for t in self.tracks]
+        included = [t for t in self.tracks if t.id in set(wanted)]
         if not included:
             raise ExportError("no tracks to export (are they all muted?)")
         inc_ids = {t.id for t in included}
@@ -133,6 +175,12 @@ class ExportJob:
                 raise ExportError("this take is empty")
             names = {it.track.id: it.track.name for it in renderer.items}
             chans = {it.track.id: it.src.channels for it in renderer.items}
+            n_ch = (mix_ch if want_mix else 0) + (sum(chans[t] for t in inc_ids if t in chans) if want_stems else 0)
+            need = bytes_needed(renderer.length, n_ch, fmt)
+            free = shutil.disk_usage(folder).free
+            if free < need:
+                raise ExportError(f"Not enough free space in {folder}: this export needs about "
+                                  f"{need / 1e9:.1f} GB while working, {free / 1e9:.1f} GB is free")
             outputs = []
             mix_f = None
             if want_mix:
@@ -170,47 +218,33 @@ class ExportJob:
                 if tid in stem_f:
                     outputs.append((os.path.join(tmp, f"{tid}.f32"), chans[tid], f"{base} - {names[tid]}", it.peak, names[tid]))
 
-            for i, (raw, ch, name, peak, stem_name) in enumerate(outputs):
-                if self.cancelled.is_set():
-                    raise ExportError("cancelled")
-                frac0 = render_share + (1 - render_share) * i / len(outputs)
-                self._progress(frac0, f"Encoding {os.path.basename(name)}")
-                filters = []
-                if norm.get("peak") is not None and peak > 0:
-                    filters.append(f"volume={norm['peak'] - lin_to_db(peak):.3f}dB")
-                elif norm.get("lufs") is not None:
-                    self._progress(frac0, f"Measuring loudness of {stem_name or 'the mix'}")
-                    m = measure_loudness(raw, ch, norm["lufs"], norm["tp"])
-                    if m.get("input_i") not in ("-inf", "inf") and float(m["input_i"]) > -70:
-                        def v(key, lo, hi):
-                            try:
-                                return f"{min(hi, max(lo, float(m[key]))):.2f}"
-                            except (KeyError, ValueError):
-                                return f"{lo:.2f}"
-                        filters.append(
-                            "loudnorm=I={I}:TP={TP}:LRA=11:measured_I={mi}:measured_TP={mtp}:measured_LRA={mlra}:"
-                            "measured_thresh={mth}:offset={off}:linear=true".format(
-                                I=norm["lufs"], TP=norm["tp"], mi=v("input_i", -99, 0), mtp=v("input_tp", -99, 99),
-                                mlra=v("input_lra", 0, 99), mth=v("input_thresh", -99, 0),
-                                off=v("target_offset", -99, 99)))
-                if fmt in ("flac", "wav") and quality == "16":
-                    filters.append(f"aresample={SAMPLE_RATE}:osf=s16:dither_method=triangular")
-                else:
-                    filters.append(f"aresample={SAMPLE_RATE}")
-                out_path = unique_path(folder, name, ext)
-                cmd = [ffmpeg_path(), "-hide_banner", "-nostats", "-loglevel", "error", "-y"] + _raw_input(raw, ch)
-                cmd += ["-af", ",".join(filters)] + codec_args(fmt, quality)
-                cmd += ["-ar", str(SAMPLE_RATE)]
-                cmd += self._tag_args(stem_name) + [out_path]
-                self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-                _, err = self._proc.communicate()
-                code = self._proc.returncode
-                self._proc = None
-                if self.cancelled.is_set():
-                    raise ExportError("cancelled")
-                if code != 0:
-                    raise ExportError(f"ffmpeg failed: {err.strip()[-400:]}")
-                self.files.append(out_path)
+            taken = set()
+            jobs = []
+            for raw, ch, name, peak, stem_name in outputs:
+                out_path = unique_path(folder, name, ext, taken)
+                taken.add(out_path)
+                jobs.append((raw, ch, out_path, peak, stem_name))
+            done = []
+            first_error = None
+            self._progress(render_share, "Encoding" if len(jobs) == 1 else f"Encoding {len(jobs)} files")
+            workers = max(1, min(len(jobs), (os.cpu_count() or 2) - 1))
+            with ThreadPoolExecutor(workers, thread_name_prefix="export-encode") as pool:
+                futures = [pool.submit(self._encode, *job, fmt, quality, norm) for job in jobs]
+                for fut in as_completed(futures):
+                    try:
+                        done.append(fut.result())
+                    except Exception as e:
+                        if first_error is None:
+                            first_error = e
+                            self._halt()  # no point finishing the others
+                        continue
+                    self._progress(render_share + (1 - render_share) * len(done) / len(jobs),
+                                   f"Encoded {len(done)} of {len(jobs)}")
+            self.files = [j[2] for j in jobs if j[2] in done]
+            if self.cancelled.is_set():
+                raise ExportError("cancelled")
+            if first_error is not None:
+                raise first_error
             self._progress(1.0, "Done")
             return self.files
         except ExportError:
@@ -223,6 +257,44 @@ class ExportJob:
             raise
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def _encode(self, raw, ch, out_path, peak, stem_name, fmt, quality, norm):
+        if self._stop.is_set():
+            raise ExportError("cancelled")
+        filters = []
+        if norm.get("peak") is not None and peak > 0:
+            filters.append(f"volume={norm['peak'] - lin_to_db(peak):.3f}dB")
+        elif norm.get("lufs") is not None:
+            m = parse_loudness(self._ffmpeg(loudness_cmd(raw, ch, norm["lufs"], norm["tp"])))
+            if m.get("input_i") not in ("-inf", "inf") and float(m["input_i"]) > -70:
+                def v(key, lo, hi):
+                    try:
+                        return f"{min(hi, max(lo, float(m[key]))):.2f}"
+                    except (KeyError, ValueError):
+                        return f"{lo:.2f}"
+                filters.append(
+                    "loudnorm=I={I}:TP={TP}:LRA=11:measured_I={mi}:measured_TP={mtp}:measured_LRA={mlra}:"
+                    "measured_thresh={mth}:offset={off}:linear=true".format(
+                        I=norm["lufs"], TP=norm["tp"], mi=v("input_i", -99, 0), mtp=v("input_tp", -99, 99),
+                        mlra=v("input_lra", 0, 99), mth=v("input_thresh", -99, 0),
+                        off=v("target_offset", -99, 99)))
+        if fmt in ("flac", "wav") and quality == "16":
+            filters.append(f"aresample={SAMPLE_RATE}:osf=s16:dither_method=triangular")
+        else:
+            filters.append(f"aresample={SAMPLE_RATE}")
+        cmd = [ffmpeg_path(), "-hide_banner", "-nostats", "-loglevel", "error", "-y"] + _raw_input(raw, ch)
+        cmd += ["-af", ",".join(filters)] + codec_args(fmt, quality)
+        cmd += ["-ar", str(SAMPLE_RATE)]
+        cmd += self._tag_args(stem_name) + [out_path]
+        try:
+            self._ffmpeg(cmd)
+        except ExportError:
+            try:
+                os.remove(out_path)  # never leave a half-written file behind
+            except OSError:
+                pass
+            raise
+        return out_path
 
     def _tag_args(self, stem_name):
         tags = dict(self.opts.get("tags") or {})

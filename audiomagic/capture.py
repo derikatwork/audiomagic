@@ -176,15 +176,18 @@ class Capture:
         """React to a PipeWire graph change."""
 
     def _appsink_tail(self, pipeline, sync=False):
+        # The queue gives our Python callback its own thread and 3 s of slack,
+        # so a busy moment (or a slow disk) never stalls PipeWire and loses audio.
+        buf = make("queue", max_size_buffers=0, max_size_bytes=0, max_size_time=3 * Gst.SECOND)
         conv = make("audioconvert")
         res = make("audioresample")
         caps = make("capsfilter", caps=raw_caps(self.channels))
         sink = make("appsink", "sink", emit_signals=True, sync=sync, max_buffers=64, drop=False,
                     caps=raw_caps(self.channels))
-        for e in (conv, res, caps, sink):
+        for e in (buf, conv, res, caps, sink):
             pipeline.add(e)
-        link_many(conv, res, caps, sink)
-        return conv
+        link_many(buf, conv, res, caps, sink)
+        return buf
 
 
 class PipeWireCapture(Capture):

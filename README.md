@@ -141,6 +141,17 @@ restored. Settings live in `~/.config/audiomagic/`.
   it up again automatically.
 - **A program isn't listed.** Programs only appear while they are playing
   sound. Start the call or video, then press **Refresh**.
+- **"Effects are using more CPU than this computer has".** It can't run the
+  live effects for this many inputs in real time, so meters and monitoring
+  may stutter. **Your recordings are not affected** (effects are only applied
+  live for listening; the files are always recorded raw). Turn off noise
+  suppression on some inputs to make it go away.
+- **An input "lost audio".** If a device drops out for a moment (a USB
+  hiccup), the gap is filled with silence so it stays in sync with the other
+  inputs, and the log says so.
+- **Export says there isn't enough space.** Exporting writes temporary files
+  next to the export folder (about 700 MB per mono track per hour, plus the
+  finished files). Free some space or choose another folder.
 - **No window, it opened in the browser.** WebKitGTK is missing:
   `sudo apt install gir1.2-webkit2-4.1`. Or run `audiomagic --browser` on purpose.
 - **Something else.** Run `audiomagic --check`, and `audiomagic --debug` for
@@ -151,7 +162,7 @@ restored. Settings live in `~/.config/audiomagic/`.
 | Part | Technology |
 |---|---|
 | Capture | PipeWire, through GStreamer's `pipewiresrc`. Inputs are found and watched with `pw-dump`. |
-| Monitoring and playback | Played back into PipeWire, which mixes and routes them. |
+| Monitoring and playback | Played through PipeWire's PulseAudio service (`pulsesink`), which PipeWire mixes and routes. (PipeWire 1.0's own `pipewiresink` can deadlock when a stream starts; it's only used if that service isn't running.) |
 | Effects | Written in NumPy/SciPy, so live monitoring, playback and export sound identical. |
 | Export | ffmpeg: encoding, tags and two-pass loudness normalization. |
 | Interface | A local web page (HTML/JS, no build step) in a GTK WebKit window. The server listens only on 127.0.0.1 and every request needs a per-launch secret key. |
@@ -180,6 +191,11 @@ The tests in `tests/test_pipewire.py`, `test_network.py` and
 `test_server.py` need a running PipeWire. They create their own virtual
 devices, record from them and check the results: timing alignment between
 inputs, monitoring, playback, edits and every export format.
+`test_stress.py` records 11 inputs with every effect on and checks that not a
+single sample is lost. `test_qa.py` covers edge cases: fuzzed edits, awkward
+file names, crashes and a full disk during recording, cancelled exports and
+malformed API requests. [docs/QA-REPORT.md](docs/QA-REPORT.md) has the results
+of the longer stress runs.
 
 ## Not yet
 

@@ -1,5 +1,12 @@
-"""Audio output to PipeWire (live monitoring and playback)."""
+"""Audio output to PipeWire (live monitoring and playback).
 
+Outputs go through PipeWire's PulseAudio service (pulsesink) when it is
+running, as it is on every current desktop. PipeWire 1.0's own pipewiresink
+can deadlock when a stream starts, and since it shares its connection with
+the pipewiresrc inputs, that would freeze every input in the app.
+"""
+
+import os
 import threading
 
 import numpy as np
@@ -9,8 +16,17 @@ from .gst import Gst, drain_bus, link_many, make, pw_props, raw_caps
 from .util import log
 
 
+def pulse_available():
+    if Gst.ElementFactory.find("pulsesink") is None:
+        return False
+    if os.environ.get("PULSE_SERVER"):
+        return True
+    runtime = os.environ.get("PULSE_RUNTIME_PATH") or os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""), "pulse")
+    return os.path.exists(os.path.join(runtime, "native"))
+
+
 class OutputStream:
-    """appsrc -> pipewiresink. ``live`` streams push as data arrives (monitoring);
+    """appsrc -> pulsesink (or pipewiresink). ``live`` streams push as data arrives (monitoring);
     non-live streams are paced by the sink clock (playback)."""
 
     _counter = 0
@@ -36,19 +52,30 @@ class OutputStream:
             src.set_property("max-bytes", bytes_per_sec // 4)
         conv = make("audioconvert")
         res = make("audioresample")
-        sink = make("pipewiresink", "sink", sync=not live, client_name="AudioMagic")
-        props = {
-            "media.type": "Audio",
-            "media.category": "Playback",
-            "media.role": "Production",
-            "node.name": name,
-            "node.description": f"AudioMagic: {label}",
-        }
-        if latency_frames:
-            props["node.latency"] = f"{latency_frames}/{SAMPLE_RATE}"
-        sink.set_property("stream-properties", pw_props(props))
-        if target:
-            sink.set_property("target-object", target)
+        if pulse_available():
+            sink = make("pulsesink", "sink", sync=not live, client_name="AudioMagic")
+            sink.set_property("stream-properties", pw_props({
+                "media.role": "production", "media.name": f"AudioMagic: {label}", "node.name": name}))
+            if live:  # monitoring: keep the delay short
+                buffer_us = int(latency_frames * 1e6 / SAMPLE_RATE) if latency_frames else 40000
+                sink.set_property("buffer-time", buffer_us)
+                sink.set_property("latency-time", min(10000, buffer_us // 2))
+            if target:
+                sink.set_property("device", target)
+        else:
+            sink = make("pipewiresink", "sink", sync=not live, client_name="AudioMagic")
+            props = {
+                "media.type": "Audio",
+                "media.category": "Playback",
+                "media.role": "Production",
+                "node.name": name,
+                "node.description": f"AudioMagic: {label}",
+            }
+            if latency_frames:
+                props["node.latency"] = f"{latency_frames}/{SAMPLE_RATE}"
+            sink.set_property("stream-properties", pw_props(props))
+            if target:
+                sink.set_property("target-object", target)
         for e in (src, conv, res, sink):
             p.add(e)
         link_many(src, conv, res, sink)

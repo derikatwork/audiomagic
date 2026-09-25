@@ -41,6 +41,14 @@ def test_wav_roundtrip_24bit(tmp_path):
     assert np.all(r.read(-5, 5) == 0)
 
 
+def test_pcm24_decoding_is_exact():
+    ints = np.array([0, 1, -1, 8388607, -8388608, 123456, -654321, 255, 256, -256], np.int32)
+    raw = ints.astype("<i4").view(np.uint8).reshape(-1, 4)[:, :3].tobytes()
+    assert np.array_equal(wavio.pcm24_to_float(raw), ints / np.float32(8388608.0))
+    assert wavio.pcm24_to_float(raw[:3]).tolist() == [0.0]
+    assert wavio.pcm24_to_float(b"").shape == (0,)
+
+
 def test_wav_crash_repair(tmp_path):
     p = str(tmp_path / "crash.wav")
     w = wavio.WavWriter(p, 1, sync_interval=100.0)

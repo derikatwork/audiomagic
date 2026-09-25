@@ -195,7 +195,7 @@ def main(argv=None):
                 wait_for_signal()
     finally:
         log.info("shutting down")
-        engine.shutdown()
         server.stop()
+        engine.shutdown()
         lock.close()
     return 0

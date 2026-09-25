@@ -9,9 +9,13 @@ NS = 1_000_000_000
 
 
 class FakeCapture:
+    _n = 0
+
     def __init__(self, synced=True):
+        FakeCapture._n += 1
         self.generation = 1
         self.graph_synced = synced
+        self.key = ("fake", FakeCapture._n)
 
 
 def ramp_blocks(total, block, start_value=0):
@@ -86,4 +90,44 @@ def test_unsynced_input_drift_is_corrected(tmp_path):
     expected = int(1000 * 485)
     assert abs(rt.written - expected) <= 2400 + 480
     rec.stop_frame = rt.written
+    rec.finalize(timeout=0.1)
+
+
+def test_device_that_loses_audio_is_kept_in_sync(tmp_path):
+    rec = Recorder(str(tmp_path))
+    t0 = rec.t_start
+    good = rec.add_track("good", "g.wav", 1, True)
+    lossy = rec.add_track("lossy", "l.wav", 1, True)
+    cap_good, cap_lossy = FakeCapture(), FakeCapture()
+    cap_good.key, cap_lossy.key = ("pw", "a"), ("pw", "b")
+    block = np.ones((1024, 1), np.float32)
+    for k in range(200):
+        t = t0 + int(k * 1024 * NS / SAMPLE_RATE)
+        good.feed(block, t, cap_good)
+        if not 50 <= k < 60:  # the second device drops ten buffers (~0.2 s)
+            lossy.feed(block * 0.5, t, cap_lossy)
+    assert abs(lossy.written - good.written) < 1024 * 2
+    assert lossy.filled_gaps >= 1
+    rec.stop_frame = good.written
+    rec.finalize(timeout=0.1)
+    y = WavReader(str(tmp_path / "l.wav")).read(0, rec.stop_frame)[:, 0]
+    # audio after the hole is back in its right place
+    assert np.all(y[170 * 1024:199 * 1024] > 0.4)
+
+
+def test_single_device_is_never_adjusted(tmp_path):
+    rec = Recorder(str(tmp_path))
+    t0 = rec.t_start
+    a = rec.add_track("a", "a.wav", 1, True)
+    b = rec.add_track("b", "b.wav", 1, True)
+    cap = FakeCapture()
+    cap.key = ("pw", "same")
+    block = np.ones((1024, 1), np.float32)
+    # clock drifts against the system clock by 1%: nothing to compare with, so nothing is inserted
+    for k in range(300):
+        t = t0 + int(k * 1024 * 1.01 * NS / SAMPLE_RATE)
+        a.feed(block, t, cap)
+        b.feed(block, t, cap)
+    assert a.written == b.written == 300 * 1024 and a.filled_gaps == b.filled_gaps == 0
+    rec.stop_frame = a.written
     rec.finalize(timeout=0.1)

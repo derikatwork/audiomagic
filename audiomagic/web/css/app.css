@@ -420,7 +420,8 @@ body.recording .editbar > *:not(.spacer) { opacity: 0.5; pointer-events: none; }
 .master-meter { width: 220px; }
 .master-meter .meter { margin: 0; height: 10px; }
 .master-meter .meter-bar { height: 8px; }
-.status { font-size: 12px; }
+.status { font-size: 12px; text-align: right; }
+.status.warn { color: var(--warn); }
 
 /* ------------------------------------------------------------- empty state */
 .empty-state {

@@ -9,6 +9,8 @@ import threading
 
 import numpy as np
 
+from .dsp import across_channels
+
 BIN = 256
 
 
@@ -29,8 +31,8 @@ class PeakBuilder:
     def add(self, x):
         if x.shape[0] == 0:
             return
-        lo = np.concatenate([self._lo, x.min(axis=1)])
-        hi = np.concatenate([self._hi, x.max(axis=1)])
+        lo = np.concatenate([self._lo, across_channels(x, np.minimum)])
+        hi = np.concatenate([self._hi, across_channels(x, np.maximum)])
         full = lo.shape[0] // BIN
         with self._lock:
             if full:

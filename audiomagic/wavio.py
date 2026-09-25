@@ -39,10 +39,18 @@ def float_to_pcm24(x):
 
 
 def pcm24_to_float(raw):
-    b = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
-    ints = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
-    ints = (ints << 8) >> 8  # sign-extend
-    return ints.astype(np.float32) / 8388608.0
+    raw = np.frombuffer(raw, dtype=np.uint8)
+    n = raw.size // 3
+    padded = np.empty(raw.size + 1, np.uint8)
+    padded[0] = 0
+    padded[1:] = raw
+    # read each sample as an int32 whose top 3 bytes are the sample (the low
+    # byte is the previous sample's last byte), then shift it back down,
+    # which also sign-extends
+    ints = np.ndarray((n,), dtype="<i4", buffer=padded, strides=(3,)) >> 8
+    out = ints.astype(np.float32)
+    out *= 1.0 / 8388608.0
+    return out
 
 
 class WavWriter:
@@ -99,6 +107,16 @@ class WavWriter:
             n = min(frames, 48000)
             self.write(np.zeros((n, self.channels), dtype=np.float32))
             frames -= n
+
+    def truncate(self, frames):
+        """Drop everything after ``frames`` (used to make all tracks of a take equally long)."""
+        with self._lock:
+            if self._f is None or frames >= self.frames:
+                return
+            self.frames = max(0, frames)
+            self._f.seek(self.HEADER_BYTES + self.frames * self._bytes_per_frame)
+            self._f.truncate()
+            self._update_header()
 
     def _update_header(self):
         data_bytes = self.frames * self._bytes_per_frame
