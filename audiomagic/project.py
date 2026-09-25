@@ -31,16 +31,18 @@ def now_iso():
 
 def music_dir():
     home = os.path.expanduser("~")
-    cfg = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), "user-dirs.dirs")
-    try:
-        with open(cfg, encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("XDG_MUSIC_DIR="):
-                    val = line.split("=", 1)[1].strip().strip('"').replace("$HOME", home)
-                    if val and os.path.isabs(val):
-                        return val
-    except OSError:
-        pass
+    # a Flatpak has its own config folder, so also look at the real one
+    configs = [os.environ.get("XDG_CONFIG_HOME", ""), os.path.join(home, ".config")]
+    for cfg in configs:
+        try:
+            with open(os.path.join(cfg, "user-dirs.dirs"), encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("XDG_MUSIC_DIR="):
+                        val = line.split("=", 1)[1].strip().strip('"').replace("$HOME", home)
+                        if val and os.path.isabs(val):
+                            return val
+        except OSError:
+            pass
     return os.path.join(home, "Music")
 
 

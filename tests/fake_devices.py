@@ -6,7 +6,8 @@ playback on demand, so these sources never underrun even on a busy machine.
 * am-load-iface: an 8-input virtual interface (AUX0..AUX7, like a pro-audio
   interface). Inputs 1-7 carry steady sines (200..800 Hz); input 8 carries a
   click every 0.5 s.
-* AmLoadApp: a program playing the same clicks.
+* AmLoadApp: a program playing the same clicks (into am-load-out).
+* am-load-mon: a separate output for monitoring.
 """
 import os
 import shutil
@@ -43,9 +44,10 @@ iface.close()
 app.close()
 
 sink_owner = subprocess.Popen(["pw-cli"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
-sink_owner.stdin.write("create-node adapter { factory.name=support.null-audio-sink node.name=am-load-out "
-                       "media.class=Audio/Sink audio.position=[ FL FR ] }\n")
-sink_owner.stdin.flush()  # the sink lives as long as this pw-cli session
+for sink in ("am-load-out", "am-load-mon"):
+    sink_owner.stdin.write(f"create-node adapter {{ factory.name=support.null-audio-sink node.name={sink} "
+                           "media.class=Audio/Sink audio.position=[ FL FR ] }\n")
+sink_owner.stdin.flush()  # the sinks live as long as this pw-cli session
 procs = [
     sink_owner,
     subprocess.Popen(["pw-loopback", "-c", "8", "-m", "[ " + " ".join(AUX) + " ]",

@@ -67,13 +67,11 @@ def run_checks():
     if shutil.which("ffmpeg") is None:
         warnings.append(f"ffmpeg is missing, so exporting won't work: {APT_HINT.format('ffmpeg')}")
     try:
+        # only look, don't load: the window picks GTK 3 or GTK 4 later
         import gi
-        gi.require_version("Gtk", "3.0")
-        try:
-            gi.require_version("WebKit2", "4.1")
-        except ValueError:
-            gi.require_version("WebKit2", "4.0")
-        from gi.repository import WebKit2  # noqa: F401
+        repo = gi.Repository.get_default()
+        if not ({"4.1", "4.0"} & set(repo.enumerate_versions("WebKit2")) or "6.0" in repo.enumerate_versions("WebKit")):
+            raise ImportError("no WebKitGTK")
     except (ImportError, ValueError):
         warnings.append("WebKitGTK is missing, so AudioMagic will open in your web browser instead: "
                         + APT_HINT.format("gir1.2-webkit2-4.1"))

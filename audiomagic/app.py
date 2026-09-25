@@ -41,38 +41,70 @@ def single_instance():
     return f
 
 
+# Inside a Flatpak the window, icon and desktop file are all named after the app ID.
+APP_ID = os.environ.get("FLATPAK_ID") or "audiomagic"
+
+
 def load_gtk():
+    """GTK 3 with WebKit2GTK 4.1/4.0, or GTK 4 with WebKitGTK 6.0 when that's all
+    there is (newer Flatpak runtimes). Returns (gtk_major, GLib, Gtk, WebKit)."""
     import gi
-    gi.require_version("Gtk", "3.0")
-    for v in ("4.1", "4.0"):
-        try:
-            gi.require_version("WebKit2", v)
-            break
-        except ValueError:
-            continue
-    else:
-        raise ImportError("WebKit2GTK is not installed")
-    from gi.repository import GLib, Gtk, WebKit2
-    return GLib, Gtk, WebKit2
+    repo = gi.Repository.get_default()
+    webkit2 = [v for v in ("4.1", "4.0") if v in repo.enumerate_versions("WebKit2")]
+    use_gtk3 = webkit2 and "3.0" in repo.enumerate_versions("Gtk") and os.environ.get("AUDIOMAGIC_GTK") != "4"
+    if use_gtk3:
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", webkit2[0])
+        from gi.repository import GLib, Gtk, WebKit2
+        return 3, GLib, Gtk, WebKit2
+    if "6.0" not in repo.enumerate_versions("WebKit") or "4.0" not in repo.enumerate_versions("Gtk"):
+        raise ImportError("WebKitGTK is not installed")
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("WebKit", "6.0")
+    from gi.repository import GLib, Gtk, WebKit
+    return 4, GLib, Gtk, WebKit
+
+
+def _external_links(view, WebKit, url):
+    """Links to other sites open in the normal browser, not inside the app."""
+    home = url.split("?")[0].rstrip("/")
+
+    def on_decide_policy(view, decision, kind):
+        if kind in (WebKit.PolicyDecisionType.NEW_WINDOW_ACTION, WebKit.PolicyDecisionType.NAVIGATION_ACTION):
+            target = decision.get_navigation_action().get_request().get_uri() or ""
+            if not target.startswith(home) and not target.startswith("about:"):
+                decision.ignore()
+                webbrowser.open(target)
+                return True
+        return False
+
+    view.connect("decide-policy", on_decide_policy)
+
+
+def _make_view(WebKit, url, debug):
+    view = WebKit.WebView()
+    settings = view.get_settings()
+    settings.set_enable_developer_extras(debug)
+    settings.set_javascript_can_access_clipboard(True)
+    _external_links(view, WebKit, url)
+    view.load_uri(url)
+    return view
 
 
 def run_window(url, engine, debug=False):
-    GLib, Gtk, WebKit2 = load_gtk()
-    GLib.set_prgname("audiomagic")
+    major, GLib, Gtk, WebKit = load_gtk()
+    GLib.set_prgname(APP_ID)
     GLib.set_application_name("AudioMagic")
+    if major == 4:
+        return _run_window_gtk4(url, engine, debug, GLib, Gtk, WebKit)
     win = Gtk.Window(title="AudioMagic")
     win.set_default_size(1320, 840)
-    win.set_wmclass("audiomagic", "AudioMagic")
+    win.set_wmclass(APP_ID, "AudioMagic")
     try:
         win.set_icon_from_file(ICON)
     except Exception:
         pass
-    view = WebKit2.WebView()
-    settings = view.get_settings()
-    settings.set_enable_developer_extras(debug)
-    settings.set_javascript_can_access_clipboard(True)
-    view.load_uri(url)
-    win.add(view)
+    win.add(_make_view(WebKit, url, debug))
 
     def on_delete(*_):
         if engine.recorder is not None:
@@ -87,19 +119,8 @@ def run_window(url, engine, debug=False):
         Gtk.main_quit()
         return False
 
-    def on_decide_policy(view, decision, kind):
-        # links to other sites open in the normal browser, not inside the app
-        if kind == WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION or kind == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
-            req = decision.get_navigation_action().get_request()
-            target = req.get_uri() or ""
-            if not target.startswith(url.split("?")[0].rstrip("/")) and not target.startswith("about:"):
-                decision.ignore()
-                webbrowser.open(target)
-                return True
-        return False
-
     win.connect("delete-event", on_delete)
-    view.connect("decide-policy", on_decide_policy)
+
     def check_quit():
         if _quit.is_set():
             Gtk.main_quit()
@@ -113,19 +134,67 @@ def run_window(url, engine, debug=False):
     Gtk.main()
 
 
+def _run_window_gtk4(url, engine, debug, GLib, Gtk, WebKit):
+    Gtk.init()
+    win = Gtk.Window(title="AudioMagic")
+    win.set_default_size(1320, 840)
+    win.set_icon_name(APP_ID)
+    win.set_child(_make_view(WebKit, url, debug))
+    loop = GLib.MainLoop()
+    confirmed = []
+
+    def on_close(_win):
+        if engine.recorder is not None and not confirmed:
+            dlg = Gtk.AlertDialog(message="You are still recording", detail="Stop the recording, save it and quit?",
+                                  buttons=["Keep recording", "Stop and quit"], cancel_button=0, default_button=1)
+
+            def answered(d, result):
+                try:
+                    choice = d.choose_finish(result)
+                except GLib.Error:
+                    return
+                if choice == 1:
+                    confirmed.append(True)
+                    loop.quit()
+
+            dlg.choose(win, None, answered)
+            return True
+        loop.quit()
+        return False
+
+    win.connect("close-request", on_close)
+
+    def check_quit():
+        if _quit.is_set():
+            loop.quit()
+            return False
+        return True
+
+    GLib.timeout_add(200, check_quit)
+    if _quit.is_set():
+        return
+    win.present()
+    loop.run()
+    win.destroy()
+
+
 def show_message(title, text, error=False):
-    """A small GTK dialog when there's a display; silently skipped otherwise."""
+    """A small dialog when there's a display; silently skipped otherwise."""
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return
     try:
-        import gi
-        gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk
-        d = Gtk.MessageDialog(message_type=Gtk.MessageType.ERROR if error else Gtk.MessageType.INFO,
-                              buttons=Gtk.ButtonsType.OK, text=title)
-        d.format_secondary_text(text)
-        d.run()
-        d.destroy()
+        major, GLib, Gtk, _ = load_gtk()
+        if major == 3:
+            d = Gtk.MessageDialog(message_type=Gtk.MessageType.ERROR if error else Gtk.MessageType.INFO,
+                                  buttons=Gtk.ButtonsType.OK, text=title)
+            d.format_secondary_text(text)
+            d.run()
+            d.destroy()
+        else:
+            Gtk.init()
+            loop = GLib.MainLoop()
+            Gtk.AlertDialog(message=title, detail=text).choose(None, None, lambda *_: loop.quit())
+            loop.run()
     except Exception:
         pass
 
