@@ -1,0 +1,97 @@
+name: Flatpak
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      APP_ID: io.github.derikatwork.AudioMagic
+      MANIFEST: flatpak/io.github.derikatwork.AudioMagic.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flatpak, PipeWire and test tools
+        run: |
+          # bubblewrap (used by flatpak) needs unprivileged user namespaces
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder \
+            pipewire pipewire-bin pipewire-pulse wireplumber dbus-daemon \
+            python3-numpy ffmpeg xvfb
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: GNOME runtimes on Flathub
+        run: flatpak remote-ls --user --runtime --columns=application,branch flathub | grep -E '^org\.gnome\.Platform\s' | sort -V | tail -5
+
+      - uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: flatpak-builder-${{ hashFiles('flatpak/*.yml', 'flatpak/*.json') }}
+          restore-keys: flatpak-builder-
+
+      - name: Build
+        run: |
+          flatpak-builder --user --install-deps-from=flathub --disable-rofiles-fuse --ccache \
+            --force-clean --repo=repo build-dir "$MANIFEST"
+          flatpak build-bundle repo AudioMagic.flatpak "$APP_ID" \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          ls -la AudioMagic.flatpak
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AudioMagic-flatpak
+          path: AudioMagic.flatpak
+          if-no-files-found: error
+
+      - name: Install the bundle and start PipeWire
+        run: |
+          flatpak install --user -y --noninteractive AudioMagic.flatpak
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          dbus-daemon --session --fork --address="unix:path=$XDG_RUNTIME_DIR/bus"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          (pipewire > "$RUNNER_TEMP/pipewire.log" 2>&1 &)
+          sleep 1
+          (wireplumber > "$RUNNER_TEMP/wireplumber.log" 2>&1 &)
+          (pipewire-pulse > "$RUNNER_TEMP/pipewire-pulse.log" 2>&1 &)
+          sleep 3
+          pw-cli info 0 | grep -m1 version
+
+      - name: Check inside the sandbox
+        run: flatpak run "$APP_ID" --check
+
+      - name: Record, monitor, play and export inside the sandbox
+        run: python3 flatpak/smoke_test.py
+
+      - name: Open the window (virtual display)
+        run: |
+          Xvfb :99 -screen 0 1400x900x24 &
+          sleep 2
+          DISPLAY=:99 flatpak run "$APP_ID" --debug > gui.log 2>&1 &
+          sleep 25
+          ffmpeg -loglevel error -y -f x11grab -video_size 1400x900 -i :99 -frames:v 1 window.png
+          pkill -TERM -f "python3 -m audiomagic" || true
+          sleep 3
+          cat gui.log
+          grep -q "interface connected" gui.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-output
+          path: |
+            window.png
+            gui.log
+            ${{ runner.temp }}/*.log
+          if-no-files-found: ignore

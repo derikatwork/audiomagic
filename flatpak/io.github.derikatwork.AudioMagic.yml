@@ -1,0 +1,128 @@
+# Flatpak manifest for AudioMagic.
+#
+# Build and install (see README.md, "Install as a Flatpak"):
+#   flatpak-builder --user --install --install-deps-from=flathub --force-clean \
+#       build-dir flatpak/io.github.derikatwork.AudioMagic.yml
+#
+# The GNOME runtime brings GTK, WebKitGTK, GStreamer (with pipewiresrc and
+# pulsesink) and Python. On top of that this bundles: ffmpeg with LAME for
+# exporting, PipeWire's pw-dump for listing devices and programs, and NumPy,
+# SciPy and aiohttp.
+app-id: io.github.derikatwork.AudioMagic
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: audiomagic
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # recording: PipeWire directly; playback and monitoring: its PulseAudio service
+  - --filesystem=xdg-run/pipewire-0
+  - --socket=pulseaudio
+  # internet streams, SRT from OBS, and the app's own local page
+  - --share=network
+  # projects live in ~/Music/AudioMagic, exports can go anywhere in your home folder
+  - --filesystem=home
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /lib/*.a
+  - /lib/*.la
+  - /share/man
+
+modules:
+  # MP3 encoder, linked into ffmpeg (static, so nothing clashes with the runtime)
+  - name: lame
+    config-opts:
+      - --disable-shared
+      - --enable-static
+      - --disable-frontend
+      - --disable-decoder
+      - --with-pic
+    sources:
+      - type: archive
+        url: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
+        sha256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+
+  # ffmpeg for exporting: FLAC, MP3, Opus, Vorbis, WAV and loudness normalization.
+  # Static, so it doesn't replace the runtime's own libavcodec.
+  - name: ffmpeg
+    config-opts:
+      - --disable-shared
+      - --enable-static
+      - --disable-autodetect
+      - --disable-doc
+      - --disable-debug
+      - --disable-ffplay
+      - --disable-ffprobe
+      - --disable-network
+      - --disable-devices
+      - --disable-hwaccels
+      - --enable-libmp3lame
+      - --enable-libopus
+      - --enable-libvorbis
+    sources:
+      - type: git
+        url: https://github.com/FFmpeg/FFmpeg.git
+        tag: n8.1.3
+        commit: 1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7
+
+  # pw-dump, which AudioMagic uses to list devices and programs. The runtime has
+  # the PipeWire library but not its command-line tools. Installed in its own
+  # folder so it can't interfere with the runtime's PipeWire.
+  - name: pipewire-tools
+    buildsystem: meson
+    config-opts:
+      - --prefix=/app/pwtools
+      - --libdir=lib
+      - --auto-features=disabled
+      - -Dspa-plugins=enabled
+      - -Dsupport=enabled
+      - -Ddbus=disabled
+      - -Dsession-managers=[]
+      - -Dexamples=disabled
+      - -Dtests=disabled
+      - -Dman=disabled
+      - -Ddocs=disabled
+    post-install:
+      - find /app/pwtools/bin -type f ! -name pw-dump -delete
+      - rm -rf /app/pwtools/include /app/pwtools/etc /app/pwtools/lib/pkgconfig
+      - rm -rf /app/pwtools/lib/pipewire-0.3/jack /app/pwtools/lib/pipewire-0.3/v4l2
+      - cd /app/pwtools/lib/spa-0.2 && rm -rf aec audiotestsrc control filter-graph videoconvert videotestsrc
+      - cd /app/pwtools/lib/pipewire-0.3 && ls | grep -vE 'module-(rt|protocol-native|client-node|client-device|adapter|metadata|session-manager|spa-node-factory|spa-device-factory)\.so$' | xargs -r rm -rf
+      - find /app/pwtools/share/pipewire -type f ! -name client.conf -delete
+      - find /app/pwtools/share -mindepth 1 -type d -empty -delete
+    sources:
+      - type: git
+        url: https://github.com/PipeWire/pipewire.git
+        tag: 1.4.11
+        commit: 255541eac34370e312f0c5c8c18e46dc1911352f
+
+  - python-deps.json
+
+  - name: audiomagic
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/share/audiomagic
+      - cp -r audiomagic /app/share/audiomagic/
+      - find /app/share/audiomagic -name __pycache__ -type d -prune -exec rm -rf {} +
+      - python3 -m compileall -q /app/share/audiomagic
+      - install -Dm755 flatpak/audiomagic.sh /app/bin/audiomagic
+      - install -Dm755 flatpak/pw-dump.sh /app/bin/pw-dump
+      - install -Dm644 audiomagic/web/img/icon.svg /app/share/icons/hicolor/scalable/apps/io.github.derikatwork.AudioMagic.svg
+      - install -Dm644 flatpak/io.github.derikatwork.AudioMagic.desktop -t /app/share/applications
+      - install -Dm644 flatpak/io.github.derikatwork.AudioMagic.metainfo.xml -t /app/share/metainfo
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .git
+          - .github
+          - .flatpak-builder
+          - build-dir
+          - repo
+          - tests
+          - docs

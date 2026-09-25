@@ -269,6 +269,7 @@ class Server:
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
         self.clients.add(ws)
+        log.debug("interface connected (%d open)", len(self.clients))
         try:
             await ws.send_json({"type": "state", "state": await self.call(self.engine.state)})
             async for msg in ws:

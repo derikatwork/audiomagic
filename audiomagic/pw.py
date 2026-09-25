@@ -60,8 +60,9 @@ class Node:
 
 
 class Graph:
-    def __init__(self, nodes=None, default_sink=None, default_source=None, ok=True, error=None):
+    def __init__(self, nodes=None, default_sink=None, default_source=None, ok=True, error=None, version=None):
         self.nodes = nodes or {}
+        self.version = version  # of the PipeWire daemon
         self.default_sink = default_sink
         self.default_source = default_source
         self.ok = ok
@@ -106,12 +107,14 @@ class Graph:
 def parse_dump(objs):
     nodes = {}
     ports = []
-    default_sink = default_source = None
+    default_sink = default_source = version = None
     for o in objs:
         t = o.get("type", "")
         info = o.get("info") or {}
         props = info.get("props") or o.get("props") or {}
-        if t == "PipeWire:Interface:Node":
+        if t == "PipeWire:Interface:Core":
+            version = info.get("version")
+        elif t == "PipeWire:Interface:Node":
             n = Node(o["id"], props)
             if n.name.startswith(OUR_PREFIX):
                 continue
@@ -141,7 +144,7 @@ def parse_dump(objs):
             chosen = []
         chosen.sort(key=lambda p: (p.get("port.id", 0), p.get("object.id", 0)))
         n.channels = [p.get("audio.channel") or "MONO" for p in chosen]
-    return Graph(nodes, default_sink, default_source)
+    return Graph(nodes, default_sink, default_source, version=version)
 
 
 def decode_dump(text):

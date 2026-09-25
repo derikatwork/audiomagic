@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=AudioMagic
+GenericName=Audio Recorder
+Comment=Record several microphones, programs and streams at once
+Exec=audiomagic
+Icon=io.github.derikatwork.AudioMagic
+Terminal=false
+Categories=AudioVideo;Audio;Recorder;
+Keywords=record;recorder;podcast;microphone;pipewire;audio;multitrack;
+StartupWMClass=io.github.derikatwork.AudioMagic
+StartupNotify=true

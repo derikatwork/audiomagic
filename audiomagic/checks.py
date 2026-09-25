@@ -2,7 +2,6 @@
 
 import importlib
 import shutil
-import subprocess
 
 APT_HINT = "sudo apt install {}"
 
@@ -47,15 +46,12 @@ def run_checks():
     if shutil.which("pw-dump") is None:
         problems.append(f"pw-dump is missing: {APT_HINT.format('pipewire-bin')}")
     else:
-        r = subprocess.run(["pw-cli", "info", "0"], capture_output=True, text=True) if shutil.which("pw-cli") else None
-        if r is not None and r.returncode != 0:
+        from .pw import snapshot
+        graph = snapshot()
+        if not graph.ok:
             problems.append("PipeWire is not running for this user (check: systemctl --user status pipewire)")
-        elif r is not None:
-            for line in r.stdout.splitlines():
-                if "version" in line and '"' in line:
-                    version = line.split('"')[1]
-                    info.append(f"PipeWire {version}")
-                    break
+        else:
+            info.append(f"PipeWire {graph.version or '(unknown version)'}")
             try:
                 from .output import pulse_available
                 if not pulse_available():
