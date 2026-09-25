@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AudioMagic</title>
+  <link rel="icon" href="/static/img/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="/static/img/icon.svg" alt="" width="22" height="22"><span>AudioMagic</span></div>
+    <button id="project-btn" class="project-btn" type="button" title="Projects">
+      <span id="project-name">…</span><span class="caret">▾</span>
+    </button>
+    <div class="spacer"></div>
+    <span id="disk" class="disk muted"></span>
+    <label class="output-pick" title="Where you hear monitoring and playback">
+      <span class="icon-wrap" id="output-icon"></span>
+      <select id="output-select" aria-label="Output device"></select>
+    </label>
+    <button id="help-btn" class="icon-btn" type="button" title="Help and keyboard shortcuts (?)"></button>
+  </header>
+
+  <section class="transport" aria-label="Transport">
+    <button id="rec-btn" class="rec-btn" type="button" title="Record (R)"><span class="rec-dot"></span><span class="rec-label">Record</span></button>
+    <button id="play-btn" class="tp-btn" type="button" title="Play / pause (Space)"></button>
+    <button id="stop-btn" class="tp-btn" type="button" title="Stop"></button>
+    <div id="clock" class="clock" aria-live="off">00:00.0</div>
+    <div class="take-pick">
+      <label for="take-select" class="muted">Take</label>
+      <select id="take-select" aria-label="Take"></select>
+      <button id="take-rename" class="icon-btn" type="button" title="Rename take"></button>
+      <button id="take-delete" class="icon-btn" type="button" title="Delete take"></button>
+    </div>
+    <div class="spacer"></div>
+    <button id="export-btn" class="btn primary" type="button" title="Export this take"></button>
+  </section>
+
+  <section class="editbar" aria-label="Editing">
+    <span id="sel-info" class="sel-info muted">Drag across the waveform to select</span>
+    <div class="group">
+      <button id="cut-btn" class="btn small" type="button" title="Cut the selection from all tracks (Delete)"></button>
+      <button id="silence-btn" class="btn small" type="button" title="Silence the selection on one track"></button>
+      <button id="trim-btn" class="btn small" type="button" title="Keep only the selection"></button>
+    </div>
+    <div class="group">
+      <button id="undo-btn" class="icon-btn" type="button" title="Undo (Ctrl+Z)"></button>
+      <button id="redo-btn" class="icon-btn" type="button" title="Redo (Ctrl+Shift+Z)"></button>
+    </div>
+    <div class="group fades">
+      <label>Fade in <input id="fade-in" type="number" min="0" max="60" step="0.1" value="0"> s</label>
+      <label>Fade out <input id="fade-out" type="number" min="0" max="60" step="0.1" value="0"> s</label>
+    </div>
+    <div class="spacer"></div>
+    <div class="group">
+      <button id="zoom-out" class="icon-btn" type="button" title="Zoom out (-)"></button>
+      <button id="zoom-in" class="icon-btn" type="button" title="Zoom in (+)"></button>
+      <button id="zoom-fit" class="icon-btn" type="button" title="Zoom to fit (F)"></button>
+    </div>
+  </section>
+
+  <main id="workspace" class="workspace">
+    <div class="grid">
+      <div class="headers">
+        <div class="ruler-corner"><span class="muted">Inputs</span></div>
+        <div id="track-headers"></div>
+        <div class="add-row"><button id="add-input" class="btn add-btn" type="button"></button></div>
+      </div>
+      <div class="lanes-wrap">
+        <div id="lanes" class="lanes">
+          <div id="lanes-inner" class="lanes-inner">
+            <div id="canvas-stack" class="canvas-stack">
+              <canvas id="wave"></canvas>
+              <canvas id="overlay"></canvas>
+            </div>
+          </div>
+        </div>
+        <div id="lanes-hint" class="lanes-hint" hidden></div>
+      </div>
+    </div>
+    <div id="empty" class="empty-state" hidden>
+      <img src="/static/img/icon.svg" alt="" width="56" height="56">
+      <h1>Let's record something</h1>
+      <p>Add the microphones, interface inputs, programs or streams you want to record. Each one gets its own track and its own controls.</p>
+      <button id="empty-add" class="btn primary large" type="button">Add your first input</button>
+      <button id="empty-help" class="btn link" type="button">How does it work?</button>
+    </div>
+  </main>
+
+  <footer class="master">
+    <span class="lbl">Master</span>
+    <input id="master-gain" class="slider" type="range" min="-30" max="12" step="0.5" aria-label="Master volume">
+    <span id="master-val" class="val">0.0 dB</span>
+    <div id="master-meter" class="master-meter"></div>
+    <div class="spacer"></div>
+    <span id="status" class="status muted"></span>
+  </footer>
+
+  <div id="modal-root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <div id="offline" class="offline" hidden>Reconnecting to AudioMagic…</div>
+</body>
+</html>
