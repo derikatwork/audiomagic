@@ -71,13 +71,18 @@ def main():
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(WORK)
     projects = os.path.join(WORK, "projects")
-    # its own settings too: they remember the last project, which would be the other smoke test's
+    # Its own settings too: they remember the last project, which would be the other smoke
+    # test's. Flatpak sets XDG_CONFIG_HOME itself (over --env), so it's set inside the sandbox.
     config = os.path.join(WORK, "config")
+    inner = f'XDG_CONFIG_HOME={shlex.quote(config)} exec {{}} "$@"'
     # AUDIOMAGIC_CMD runs something else instead (e.g. "python3 -m audiomagic", to test this script)
-    cmd = shlex.split(os.environ.get(
-        "AUDIOMAGIC_CMD", f"flatpak run --env=AUDIOMAGIC_ROOT={projects} --env=XDG_CONFIG_HOME={config} {APP}"))
-    env = dict(os.environ, AUDIOMAGIC_ROOT=projects, XDG_CONFIG_HOME=config, TERM="xterm-256color")
-    term = Terminal(cmd + ["--tui"], env)
+    if "AUDIOMAGIC_CMD" in os.environ:
+        argv = ["sh", "-c", inner.format(os.environ["AUDIOMAGIC_CMD"]), "sh", "--tui"]
+    else:
+        argv = ["flatpak", "run", f"--env=AUDIOMAGIC_ROOT={projects}", "--command=sh", APP,
+                "-c", inner.format("audiomagic"), "sh", "--tui"]
+    env = dict(os.environ, AUDIOMAGIC_ROOT=projects, TERM="xterm-256color")
+    term = Terminal(argv, env)
     try:
         # this line appears once the engine's first state is on screen
         check(term.wait_for(b"No inputs yet", 60), "the terminal interface drew its screen")
