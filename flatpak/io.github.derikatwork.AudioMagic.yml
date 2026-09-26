@@ -123,6 +123,7 @@ modules:
     buildsystem: meson
     subdir: subprojects/gst-plugins-bad
     config-opts:
+      - --libdir=lib
       - -Dauto_features=disabled
       - -Dsrt=enabled
       - -Dexamples=disabled
