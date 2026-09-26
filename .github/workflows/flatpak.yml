@@ -32,9 +32,6 @@ jobs:
             python3-numpy ffmpeg xvfb
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-      - name: GNOME runtimes on Flathub
-        run: flatpak remote-ls --user --runtime --columns=application,branch flathub | grep -E '^org\.gnome\.Platform\s' | sort -V | tail -5
-
       - uses: actions/cache/restore@v4
         id: cache
         with:
@@ -112,3 +109,12 @@ jobs:
             gui.log
             ${{ runner.temp }}/*.log
           if-no-files-found: ignore
+
+      - name: Is the runtime still supported?
+        if: always()
+        run: |
+          echo "GNOME runtimes on Flathub:"
+          flatpak remote-ls --user --runtime --columns=application,branch flathub | grep -E '^org\.gnome\.Platform\s' | sort -V | tail -4
+          version=$(grep -oP '^runtime-version: "\K[^"]+' "$MANIFEST")
+          echo "The manifest uses $version:"
+          flatpak remote-info --user flathub "org.gnome.Platform//$version" | grep -iE "end-of-life|^ *Version|Date" || true
