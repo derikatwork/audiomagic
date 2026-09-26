@@ -71,9 +71,12 @@ def main():
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(WORK)
     projects = os.path.join(WORK, "projects")
+    # its own settings too: they remember the last project, which would be the other smoke test's
+    config = os.path.join(WORK, "config")
     # AUDIOMAGIC_CMD runs something else instead (e.g. "python3 -m audiomagic", to test this script)
-    cmd = shlex.split(os.environ.get("AUDIOMAGIC_CMD", f"flatpak run --env=AUDIOMAGIC_ROOT={projects} {APP}"))
-    env = dict(os.environ, AUDIOMAGIC_ROOT=projects, TERM="xterm-256color")
+    cmd = shlex.split(os.environ.get(
+        "AUDIOMAGIC_CMD", f"flatpak run --env=AUDIOMAGIC_ROOT={projects} --env=XDG_CONFIG_HOME={config} {APP}"))
+    env = dict(os.environ, AUDIOMAGIC_ROOT=projects, XDG_CONFIG_HOME=config, TERM="xterm-256color")
     term = Terminal(cmd + ["--tui"], env)
     try:
         # this line appears once the engine's first state is on screen
@@ -115,6 +118,13 @@ def main():
     if failures:
         tail = term.out[-3000:].decode("utf-8", "replace")
         print(f"\n{len(failures)} check(s) failed. The end of the terminal output:\n{tail!r}")
+        cache = os.environ.get("XDG_CACHE_HOME") if "AUDIOMAGIC_CMD" in os.environ else \
+            os.path.expanduser(f"~/.var/app/{APP}/cache")
+        try:
+            with open(os.path.join(cache or os.path.expanduser("~/.cache"), "audiomagic", "tui.log")) as f:
+                print("\nThe end of tui.log:\n" + f.read()[-3000:])
+        except OSError as e:
+            print(f"(no tui.log: {e})")
         sys.exit(1)
     print("\nThe terminal interface works inside the sandbox.")
 
