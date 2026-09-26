@@ -120,22 +120,14 @@ modules:
         commit: 899348d8318eb9a3c5a5b6ec43c4a1114288773a
 
   - name: gst-plugin-srt
-    buildsystem: meson
+    buildsystem: simple
     subdir: subprojects/gst-plugins-bad
-    config-opts:
-      - --libdir=lib
-      - -Dauto_features=disabled
-      - -Dsrt=enabled
-      - -Dexamples=disabled
-      - -Dtests=disabled
-      - -Dintrospection=disabled
-      - -Dnls=disabled
-      - -Dorc=disabled
-      - -Ddoc=disabled
-    post-install:
-      # keep only the plugin: the libraries built alongside it are in the runtime already
-      - find /app/lib -maxdepth 1 -name 'libgst*' -delete
-      - find /app/lib/gstreamer-1.0 -type f ! -name libgstsrt.so -delete
+    build-commands:
+      # just this one plugin, nothing else from gst-plugins-bad
+      - meson setup _build --prefix=/app --libdir=lib --buildtype=release -Dauto_features=disabled -Dsrt=enabled
+        -Dexamples=disabled -Dtests=disabled -Dintrospection=disabled -Dnls=disabled -Dorc=disabled -Ddoc=disabled
+      - ninja -C _build ext/srt/libgstsrt.so
+      - install -Dm755 _build/ext/srt/libgstsrt.so -t /app/lib/gstreamer-1.0/
     sources:
       - type: git
         url: https://github.com/GStreamer/gstreamer.git
