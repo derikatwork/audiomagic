@@ -247,3 +247,11 @@ window on a virtual display.
 - Built-in invite links for remote guests (use a call program for now).
 - The noise suppressor is a classic spectral one: great for fans, hiss and
   hum, less so for sudden noises like keyboard clicks or dogs.
+
+## Licence
+
+AudioMagic is free software under the [MIT licence](LICENSE): use it, change
+it and share it however you like, as long as the copyright notice stays with
+it. The Flatpak also includes other open-source components under their own
+licences (FFmpeg and LAME under the LGPL, SRT under the MPL, PipeWire under
+MIT, and others); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

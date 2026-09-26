@@ -84,6 +84,14 @@ jobs:
           flatpak run --command=python3 "$APP_ID" -c 'import gi; gi.require_version("Gst", "1.0"); from gi.repository import Gst; Gst.init(None); print({e: bool(Gst.ElementFactory.find(e)) for e in "srtsrc tsdemux aacparse avdec_aac opusdec souphttpsrc hlsdemux uridecodebin pipewiresrc pulsesink".split()})' || true
           flatpak run "$APP_ID" --check
 
+      - name: Licence texts are included
+        run: |
+          flatpak run --command=sh "$APP_ID" -c 'cd /app/share/licenses/$FLATPAK_ID && ls -R . &&
+            for f in LICENSE THIRD-PARTY-NOTICES.md lame/COPYING ffmpeg/COPYING.LGPLv2.1 ffmpeg/LICENSE.md \
+                     pipewire/COPYING pipewire/LICENSE srt/LICENSE gst-plugin-srt/COPYING; do
+              test -s "$f" || { echo "missing: $f"; exit 1; }
+            done'
+
       - name: Record, monitor, play and export inside the sandbox
         run: python3 flatpak/smoke_test.py
 
