@@ -10,7 +10,7 @@
 # SciPy and aiohttp.
 app-id: io.github.derikatwork.AudioMagic
 runtime: org.gnome.Platform
-runtime-version: "49"
+runtime-version: "51"
 sdk: org.gnome.Sdk
 command: audiomagic
 finish-args:
