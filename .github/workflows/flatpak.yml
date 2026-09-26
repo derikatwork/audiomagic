@@ -97,7 +97,7 @@ jobs:
           DISPLAY=:99 flatpak run "$APP_ID" --debug > gui.log 2>&1 &
           sleep 25
           ffmpeg -loglevel error -y -f x11grab -video_size 1400x900 -i :99 -frames:v 1 window.png
-          pkill -TERM -f "python3 -m audiomagic" || true
+          flatpak ps --columns=application,child-pid | awk -v app="$APP_ID" '$1 == app {print $2}' | xargs -r kill -TERM
           sleep 3
           cat gui.log
           grep -q "interface connected" gui.log

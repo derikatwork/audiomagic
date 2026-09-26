@@ -64,7 +64,10 @@ def main():
         check(True, f"app started inside the sandbox in {time.time() - t0:.1f} s")
         run(url, token)
     finally:
-        app.terminate()
+        if "AUDIOMAGIC_CMD" in os.environ:
+            app.terminate()
+        else:
+            check(stop_sandboxed_app(), "the app shut down cleanly when asked to")
         try:
             app.wait(30)
         except subprocess.TimeoutExpired:
@@ -75,6 +78,23 @@ def main():
         print(f"\n{len(failures)} problem(s):", *failures, sep="\n  ")
         sys.exit(1)
     print("\nall good")
+
+
+def stop_sandboxed_app(timeout=30):
+    """Ask the app inside the sandbox to quit (like logging out does); stopping
+    `flatpak run` itself would leave it running."""
+    def instances():
+        out = subprocess.run(["flatpak", "ps", "--columns=application,child-pid"], capture_output=True, text=True).stdout
+        return [int(f[1]) for f in (line.split() for line in out.splitlines()) if len(f) > 1 and f[0] == APP]
+    for pid in instances():
+        os.kill(pid, 15)
+    end = time.time() + timeout
+    while time.time() < end:
+        if not instances():
+            return True
+        time.sleep(0.5)
+    subprocess.run(["flatpak", "kill", APP])
+    return False
 
 
 def run(url, token):
