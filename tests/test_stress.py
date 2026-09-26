@@ -127,10 +127,39 @@ def signal_problems(interface, app, check_sync=True):
                 if glitches(x[RATE // 2:], 200 + 100 * k)]
     a, b = clicks(interface["In 8"]), clicks(app)
     for name, c in (("In 8", a), ("App", b)):
-        if c.size < 25 or set(np.diff(c).tolist()) != {24000}:  # perfectly regular: no drops, no repeats
+        expected = len(interface["In 8"]) // 24000 - 1
+        if c.size < expected or set(np.diff(c).tolist()) != {24000}:  # perfectly regular: no drops, no repeats
             problems.append(f"{name} clicks are irregular")
     if check_sync and not problems:
         offsets = np.array([b[np.argmin(np.abs(b - t))] - t for t in a])  # each click against its twin
         if offsets.max() - offsets.min() > 2:
             problems.append(f"App drifted against In 8 by {offsets.max() - offsets.min()} samples")
     return problems
+
+
+def test_a_stalled_python_loses_nothing(engine, tmp_path):
+    """Python can stall for a while (a long GC pass, a busy thread holding the
+    GIL); PipeWire must keep delivering meanwhile and the audio catch up after."""
+    engine.add_tracks([{"source": {"kind": "device", "node": "am-load-iface", "channels": [k], "device_channels": 8},
+                              "name": f"In {k + 1}"} for k in range(8)] +
+                            [{"source": {"kind": "app", "app": "AmLoadApp"}, "name": "App"}])
+    assert wait_for(lambda: all(t["status"] == "live" for t in engine.state()["tracks"]), engine=engine)
+    take_id = engine.start_recording()
+    time.sleep(2)
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(5.0)  # this thread now keeps the GIL until it sleeps
+    try:
+        end = time.perf_counter() + 0.8
+        while time.perf_counter() < end:
+            pass
+    finally:
+        sys.setswitchinterval(old)
+    end = time.time() + 3
+    while time.time() < end:
+        engine.poll()
+        time.sleep(0.1)
+    engine.stop_recording()
+    take = engine.project.take(take_id)
+    data = {f["name"]: WavReader(engine.project.abspath(f["file"])).read(0, take.duration)[:, 0] for f in take.tracks}
+    assert take.duration > 5 * RATE
+    assert not signal_problems({f"In {k + 1}": data[f"In {k + 1}"] for k in range(8)}, data["App"])

@@ -131,3 +131,33 @@ def test_single_device_is_never_adjusted(tmp_path):
     assert a.written == b.written == 300 * 1024 and a.filled_gaps == b.filled_gaps == 0
     rec.stop_frame = a.written
     rec.finalize(timeout=0.1)
+
+
+def test_stop_waits_for_an_input_catching_up_but_not_for_a_silent_one(tmp_path):
+    import threading
+    import time
+
+    rec = Recorder(str(tmp_path))
+    t0 = rec.t_start
+    late = rec.add_track("late", "late.wav", 1, True)
+    dead = rec.add_track("dead", "dead.wav", 1, True)
+    cap_l, cap_d = FakeCapture(), FakeCapture()
+    blocks = ramp_blocks(48000, 1024)
+    dead.feed(blocks[0], t0, cap_d)  # and then nothing more (unplugged)
+    rec.stop_frame = 48000
+
+    def backlog():  # after a stall, a second of queued audio arrives over 1.5 s
+        for i, b in enumerate(blocks):
+            late.feed(b, t0 + int(i * 1024 * NS / SAMPLE_RATE), cap_l)
+            time.sleep(1.5 / len(blocks))
+
+    th = threading.Thread(target=backlog)
+    th.start()
+    start = time.monotonic()
+    rec.finalize()
+    took = time.monotonic() - start
+    th.join()
+    y = WavReader(str(tmp_path / "late.wav")).read(0, 48000)[:, 0]
+    assert np.max(np.abs(y - (np.arange(48000) % 1000) / 1000.0)) < 1e-4  # all of it, nothing padded
+    assert 1.2 < took < 2.5  # waited for the input catching up, not the full timeout for the silent one
+    assert WavReader(str(tmp_path / "dead.wav")).frames == 48000

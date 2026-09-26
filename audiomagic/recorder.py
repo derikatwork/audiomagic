@@ -45,6 +45,7 @@ class RecTrack:
         self.last_end_ns = None
         self.error = None
         self.filled_gaps = 0
+        self.last_feed = time.monotonic()
 
     def _write(self, x):
         if x.shape[0] and self.error is None:
@@ -65,6 +66,7 @@ class RecTrack:
     def feed(self, x, t0, capture):
         rec = self.recorder
         with self.lock:
+            self.last_feed = time.monotonic()
             if self.done:
                 return
             n = x.shape[0]
@@ -190,13 +192,25 @@ class Recorder:
         if self.stop_frame is None:
             self.stop_frame = max(0, self.frame_at(time.monotonic_ns()))
 
-    def finalize(self, timeout=1.5):
+    def finalize(self, timeout=4.0, quiet=0.5):
         """Wait for every track to reach the stop point, then close the files.
-        Returns the take length in frames."""
+        Returns the take length in frames.
+
+        After a stall an input can be up to 3 s behind (its capture queue), so
+        inputs still delivering audio get up to ``timeout``; one that has gone
+        quiet for ``quiet`` seconds (unplugged, stream ended) isn't waited for."""
         self.request_stop()
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and not all(t.done for t in self.tracks.values()):
+        t0 = time.monotonic()
+        deadline = t0 + timeout
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            waiting = [t for t in self.tracks.values() if not t.done and t.error is None]
+            if not any(now - max(t.last_feed, t0) < quiet for t in waiting):
+                break
             time.sleep(0.02)
         for t in self.tracks.values():
+            if not t.done and t.error is None:
+                log.warning("input for %s stopped %.0f ms short of the end (waited %.1f s); padded with silence",
+                            t.track_id, (self.stop_frame - t.written) * 1000 / SAMPLE_RATE, time.monotonic() - t0)
             t.close(self.stop_frame)
         return self.stop_frame

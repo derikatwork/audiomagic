@@ -245,6 +245,10 @@ class PipeWireCapture(Capture):
             props["stream.capture.sink"] = True
         src = make("pipewiresrc", target_object=str(self.target), client_name="AudioMagic")
         src.set_property("stream-properties", pw_props(props))
+        # Hand PipeWire its buffers back straight away. PipeWire only lends a
+        # handful (~170 ms); if the queue below held on to them while Python was
+        # busy, PipeWire would run out and drop audio. Copies can wait out a stall.
+        src.set_property("always-copy", True)
         caps = make("capsfilter", caps=raw_caps(self.channels))
         p.add(src)
         p.add(caps)
