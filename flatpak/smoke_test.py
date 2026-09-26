@@ -86,8 +86,8 @@ def stop_sandboxed_app(timeout=30):
     def instances():
         out = subprocess.run(["flatpak", "ps", "--columns=application,child-pid"], capture_output=True, text=True).stdout
         return [int(f[1]) for f in (line.split() for line in out.splitlines()) if len(f) > 1 and f[0] == APP]
-    for pid in instances():
-        os.kill(pid, 15)
+    for init in instances():  # the sandbox's init process; the app is its child
+        subprocess.run(["pkill", "-TERM", "-P", str(init)])
     end = time.time() + timeout
     while time.time() < end:
         if not instances():

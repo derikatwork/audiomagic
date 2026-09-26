@@ -97,7 +97,8 @@ jobs:
           DISPLAY=:99 flatpak run "$APP_ID" --debug > gui.log 2>&1 &
           sleep 25
           ffmpeg -loglevel error -y -f x11grab -video_size 1400x900 -i :99 -frames:v 1 window.png
-          flatpak ps --columns=application,child-pid | awk -v app="$APP_ID" '$1 == app {print $2}' | xargs -r kill -TERM
+          # the app is a child of the sandbox's init process
+          flatpak ps --columns=application,child-pid | awk -v app="$APP_ID" '$1 == app {print $2}' | xargs -r -n1 pkill -TERM -P
           sleep 3
           cat gui.log
           grep -q "interface connected" gui.log
