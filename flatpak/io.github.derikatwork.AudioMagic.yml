@@ -25,6 +25,8 @@ finish-args:
   - --share=network
   # projects live in ~/Music/AudioMagic, exports can go anywhere in your home folder
   - --filesystem=home
+  # the SRT plugin built below
+  - --env=GST_PLUGIN_PATH=/app/lib/gstreamer-1.0
 
 cleanup:
   - /include
@@ -100,6 +102,44 @@ modules:
         url: https://github.com/PipeWire/pipewire.git
         tag: 1.4.11
         commit: 255541eac34370e312f0c5c8c18e46dc1911352f
+
+  # SRT input (from OBS). The runtime's GStreamer has no srtsrc, so build libsrt
+  # and just that one plugin, for the runtime's GStreamer version.
+  - name: libsrt
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_LIBDIR=lib
+      - -DENABLE_APPS=OFF
+      - -DENABLE_STATIC=OFF
+      - -DUSE_ENCLIB=openssl
+    sources:
+      - type: git
+        url: https://github.com/Haivision/srt.git
+        tag: v1.5.7
+        commit: 899348d8318eb9a3c5a5b6ec43c4a1114288773a
+
+  - name: gst-plugin-srt
+    buildsystem: meson
+    subdir: subprojects/gst-plugins-bad
+    config-opts:
+      - -Dauto_features=disabled
+      - -Dsrt=enabled
+      - -Dexamples=disabled
+      - -Dtests=disabled
+      - -Dintrospection=disabled
+      - -Dnls=disabled
+      - -Dorc=disabled
+      - -Ddoc=disabled
+    post-install:
+      # keep only the plugin: the libraries built alongside it are in the runtime already
+      - find /app/lib -maxdepth 1 -name 'libgst*' -delete
+      - find /app/lib/gstreamer-1.0 -type f ! -name libgstsrt.so -delete
+    sources:
+      - type: git
+        url: https://github.com/GStreamer/gstreamer.git
+        tag: "1.26.11"
+        commit: e6ee9e63e033b9c8e343ba0bdfa7590ef81449ee
 
   - python-deps.json
 

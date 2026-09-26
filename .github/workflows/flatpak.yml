@@ -66,8 +66,9 @@ jobs:
       - name: Install the bundle and start PipeWire
         run: |
           flatpak install --user -y --noninteractive AudioMagic.flatpak
-          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
-          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          # like a desktop session: Flatpak maps sockets from the real /run/user/<uid>
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          sudo mkdir -p "$XDG_RUNTIME_DIR" && sudo chown "$(id -u):$(id -g)" "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
           dbus-daemon --session --fork --address="unix:path=$XDG_RUNTIME_DIR/bus"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
           echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
