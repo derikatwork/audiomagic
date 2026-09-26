@@ -27,7 +27,7 @@ jobs:
           # bubblewrap (used by flatpak) needs unprivileged user namespaces
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder \
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder elfutils \
             pipewire pipewire-bin pipewire-pulse wireplumber dbus-daemon \
             python3-numpy ffmpeg xvfb
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo

@@ -55,6 +55,19 @@ Serious (could lose or damage a recording):
    to the exact length, and the waveform cache is trimmed to match (it was
    being rebuilt every time the take was opened).
 
+Found later, while packaging the Flatpak (fixed):
+
+- **A busy moment in Python could still drop audio.** The 3-second buffer
+  behind each input held on to PipeWire's own buffers, and PipeWire only
+  lends about 170 ms of them, so a stall longer than that (a long
+  garbage-collection pass, a busy thread) dropped audio on every input: a
+  deliberate 0.8 s stall lost about 540 ms. Each block is now copied out and
+  PipeWire's buffer returned at once, so the buffer really does ride out
+  stalls; the same 0.8 s stall now loses nothing (`tests/test_stress.py`).
+- **Stopping right after such a stall could cut off the end.** Stopping now
+  waits for inputs that are still catching up (up to 4 s), but not for one
+  that has gone quiet.
+
 Other bugs:
 
 5. Exporting with every track muted exported *all* of them.

@@ -36,7 +36,45 @@ the take, then export it as FLAC, Ogg or MP3.
 It's a desktop app: it opens in its own window and runs on your computer.
 Nothing is uploaded anywhere.
 
-## Install (Pop!_OS / Ubuntu 22.04 or newer)
+## Install as a Flatpak (recommended)
+
+The Flatpak brings everything AudioMagic needs with it (ffmpeg, the
+PipeWire tools, NumPy and friends) and keeps itself to itself, so there is
+nothing to install with `apt`.
+
+**Ready-made:** every push builds and tests one on GitHub. Open the repository's
+**Actions** tab, pick the latest green **Flatpak** run, download the
+**AudioMagic-flatpak** artifact and unzip it. Then:
+
+```bash
+flatpak install --user AudioMagic.flatpak
+flatpak run io.github.derikatwork.AudioMagic      # or find AudioMagic in the app menu
+```
+
+The first install also fetches the GNOME runtime from Flathub (a few hundred
+MB, shared with other Flatpak apps). Pop!_OS has Flathub set up already; on
+plain Ubuntu run
+`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo` first.
+
+**Or build it yourself** (about 15 minutes the first time):
+
+```bash
+sudo apt install flatpak-builder
+flatpak-builder --user --install --install-deps-from=flathub --force-clean \
+    build-dir flatpak/io.github.derikatwork.AudioMagic.yml
+```
+
+What the Flatpak is allowed to use: PipeWire (recording), PipeWire's
+PulseAudio service (playback and monitoring; it's on by default in Pop!_OS),
+the network (internet streams, SRT from OBS, its own local page) and your home
+folder (projects in `~/Music/AudioMagic`, exports wherever you choose).
+Recordings are in the same place as with the normal install; settings live
+in `~/.var/app/io.github.derikatwork.AudioMagic/`.
+
+To update, install a newer bundle the same way. To remove it:
+`flatpak uninstall io.github.derikatwork.AudioMagic` (your recordings are kept).
+
+## Install without Flatpak (Pop!_OS / Ubuntu 22.04 or newer)
 
 ```bash
 git clone https://github.com/derikatwork/audiomagic.git
@@ -192,10 +230,16 @@ The tests in `tests/test_pipewire.py`, `test_network.py` and
 devices, record from them and check the results: timing alignment between
 inputs, monitoring, playback, edits and every export format.
 `test_stress.py` records 11 inputs with every effect on and checks that not a
-single sample is lost. `test_qa.py` covers edge cases: fuzzed edits, awkward
-file names, crashes and a full disk during recording, cancelled exports and
-malformed API requests. [docs/QA-REPORT.md](docs/QA-REPORT.md) has the results
-of the longer stress runs.
+single sample is lost, even when Python stalls for most of a second.
+`test_qa.py` covers edge cases: fuzzed edits, awkward file names, crashes and a
+full disk during recording, cancelled exports and malformed API requests.
+[docs/QA-REPORT.md](docs/QA-REPORT.md) has the results of the longer stress runs.
+
+The Flatpak (`flatpak/`) is built on every push by
+`.github/workflows/flatpak.yml`, which then installs it on a clean machine
+and runs `flatpak/smoke_test.py`: it records from virtual devices, monitors,
+plays back and exports every format from inside the sandbox, and opens the
+window on a virtual display.
 
 ## Not yet
 
