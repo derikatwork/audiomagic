@@ -15,7 +15,7 @@ from collections import deque
 import numpy as np
 
 from . import SAMPLE_RATE
-from .gst import Gst, drain_bus, link_many, make, pw_props, raw_caps
+from .gst import Gst, GstAudio, drain_bus, link_many, make, pw_props, raw_caps
 from .util import log
 
 
@@ -64,6 +64,8 @@ class Capture:
         self.message = ""
         self.generation = 0
         self.clock = BlockClock()
+        self._inq = None
+        self._inq_bytes_per_s = None
         self.last_data_ns = 0
         self.retry_at = None
         self.lock = threading.RLock()
@@ -101,6 +103,8 @@ class Capture:
                 return
             sink = p.get_by_name("sink")
             sink.connect("new-sample", self._on_sample)
+            self._inq = p.get_by_name("inq")
+            self._inq_bytes_per_s = None
             self.generation += 1
             self.clock = BlockClock()
             self.pipeline = p
@@ -139,7 +143,7 @@ class Capture:
             return Gst.FlowReturn.OK
         data = data[:n * ch].reshape(n, ch)
         now = time.monotonic_ns()
-        t0 = self.clock.update(n, now)
+        t0 = self.clock.update(n, now - self._queued_ns())
         self.last_data_ns = now
         if self.status != "live":
             self._set_status("live")
@@ -148,6 +152,21 @@ class Capture:
         except Exception:
             log.exception("input block handler failed")
         return Gst.FlowReturn.OK
+
+    def _queued_ns(self):
+        """How long ago the block being handled arrived: the audio that came in
+        after it is still waiting in the input queue. Without this, a busy
+        moment in Python would look like the input falling behind."""
+        q = self._inq
+        if q is None:
+            return 0
+        if not self._inq_bytes_per_s:
+            caps = q.get_static_pad("sink").get_current_caps()
+            info = GstAudio.AudioInfo.new_from_caps(caps) if caps is not None else None
+            if info is None or not info.rate or not info.bpf:
+                return 0
+            self._inq_bytes_per_s = info.rate * info.bpf
+        return int(q.get_property("current-level-bytes") * 1e9 / self._inq_bytes_per_s)
 
     # ---- housekeeping (called regularly from the engine loop)
     def poll(self):
@@ -178,7 +197,7 @@ class Capture:
     def _appsink_tail(self, pipeline, sync=False):
         # The queue gives our Python callback its own thread and 3 s of slack,
         # so a busy moment (or a slow disk) never stalls PipeWire and loses audio.
-        buf = make("queue", max_size_buffers=0, max_size_bytes=0, max_size_time=3 * Gst.SECOND)
+        buf = make("queue", "inq", max_size_buffers=0, max_size_bytes=0, max_size_time=3 * Gst.SECOND)
         conv = make("audioconvert")
         res = make("audioresample")
         caps = make("capsfilter", caps=raw_caps(self.channels))

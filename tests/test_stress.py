@@ -149,7 +149,7 @@ def test_a_stalled_python_loses_nothing(engine, tmp_path):
     old = sys.getswitchinterval()
     sys.setswitchinterval(5.0)  # this thread now keeps the GIL until it sleeps
     try:
-        end = time.perf_counter() + 0.8
+        end = time.perf_counter() + float(os.environ.get("AM_STALL", "2.0"))  # longer than BlockClock.WINDOW_NS
         while time.perf_counter() < end:
             pass
     finally:

@@ -64,6 +64,12 @@ Found later, while packaging the Flatpak (fixed):
   deliberate 0.8 s stall lost about 540 ms. Each block is now copied out and
   PipeWire's buffer returned at once, so the buffer really does ride out
   stalls; the same 0.8 s stall now loses nothing (`tests/test_stress.py`).
+- **After a long stall, AudioMagic could think an input had lost audio when
+  it hadn't.** Timing was taken when a block reached Python, so blocks that
+  had waited in the buffer looked late, and the gap filler inserted silence
+  into perfectly good audio (about 1 full-suite run in 10 showed a 51 ms
+  false gap). The time each block spent waiting is now subtracted; a 2.5 s
+  stall now leaves every input intact and in sync.
 - **Stopping right after such a stall could cut off the end.** Stopping now
   waits for inputs that are still catching up (up to 4 s), but not for one
   that has gone quiet.

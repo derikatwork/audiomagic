@@ -15,7 +15,8 @@ except OSError:
 import gi  # noqa: E402
 
 gi.require_version("Gst", "1.0")
-from gi.repository import Gst  # noqa: E402
+gi.require_version("GstAudio", "1.0")
+from gi.repository import Gst, GstAudio  # noqa: E402
 
 Gst.init(None)
 
