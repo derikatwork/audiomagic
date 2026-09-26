@@ -59,6 +59,7 @@ METER_FALL = 1.2        # dB per frame (25 fps), so peaks stay readable
 CLIP_HOLD = 2.0         # seconds a clip warning stays lit
 
 SEVERITY = {"info": "information", "warn": "warning", "error": "error"}
+PEAK_LOADS = threading.BoundedSemaphore(2)  # waveforms read at once (as the local server does)
 FX_ORDER = (("ns", "NS"), ("gate", "GT"), ("eq", "EQ"))
 
 
@@ -798,7 +799,8 @@ class Timeline(Widget, can_focus=True):
 
             def load():
                 try:
-                    data = engine.peaks(*key)
+                    with PEAK_LOADS:
+                        data = engine.peaks(*key)
                 except Exception as e:
                     log.warning("could not read the waveform of %s: %s", key, e)
                     data = b""
