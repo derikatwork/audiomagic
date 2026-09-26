@@ -29,6 +29,10 @@ Python packages, installed from the pinned wheels in
 | NumPy | 2.5.3 | BSD-3-Clause (and 0BSD, MIT, Zlib, CC0-1.0 for small parts) |
 | SciPy | 1.18.1 | BSD-3-Clause |
 | aiohttp | 3.14.3 | Apache-2.0 and MIT |
+| Textual (the terminal interface) | 8.2.8 | MIT |
+| Rich | 15.0.0 | MIT |
+| Pygments | 2.21.0 | BSD-2-Clause |
+| markdown-it-py, mdit-py-plugins, mdurl, linkify-it-py, platformdirs | | MIT |
 | multidict, yarl, frozenlist, aiosignal, propcache | | Apache-2.0 |
 | attrs | | MIT |
 | aiohappyeyeballs, typing_extensions | | PSF-2.0 |
@@ -38,6 +42,13 @@ The NumPy and SciPy wheels also contain OpenBLAS (BSD-3-Clause), the GCC
 Fortran runtime (GPL-3.0-or-later with the GCC Runtime Library Exception,
 which allows use by software under any licence) and libquadmath
 (LGPL-2.1-or-later).
+
+## Downloaded by install.sh
+
+For the terminal interface, `install.sh` downloads Textual and the packages it
+uses, the same versions as in the Flatpak, pinned with hashes in
+`requirements-tui.txt`, into `~/.local/share/audiomagic/vendor/`. Their licence
+files come with them.
 
 ## Provided by the GNOME runtime or your system
 

@@ -19,6 +19,7 @@
       <li>Noise suppression, gate and EQ per track</li>
       <li>Trim, cut, fades and normalize</li>
       <li>Export the mix and each track as FLAC, MP3, Ogg Opus, Ogg Vorbis or WAV</li>
+      <li>Also runs inside a terminal: flatpak run io.github.derikatwork.AudioMagic --tui</li>
     </ul>
   </description>
   <launchable type="desktop-id">io.github.derikatwork.AudioMagic.desktop</launchable>

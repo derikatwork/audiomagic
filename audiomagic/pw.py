@@ -172,7 +172,8 @@ def decode_dump(text):
 
 def snapshot(timeout=4.0):
     try:
-        out = subprocess.run(["pw-dump", "--no-colors"], capture_output=True, timeout=timeout, check=True).stdout
+        out = subprocess.run(["pw-dump", "--no-colors"], stdin=subprocess.DEVNULL, capture_output=True,
+                             timeout=timeout, check=True).stdout
         return parse_dump(decode_dump(out.decode("utf-8", "replace")))
     except FileNotFoundError:
         return Graph(ok=False, error="pw-dump not found (install pipewire-bin)")

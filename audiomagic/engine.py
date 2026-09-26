@@ -51,7 +51,7 @@ def trash(path):
     if not os.path.exists(path):
         return
     if shutil.which("gio"):
-        r = subprocess.run(["gio", "trash", path], capture_output=True)
+        r = subprocess.run(["gio", "trash", path], stdin=subprocess.DEVNULL, capture_output=True)
         if r.returncode == 0:
             return
     fallback = os.path.join(os.path.dirname(path), ".trash")

@@ -14,7 +14,8 @@ from .util import log
 
 ICON = os.path.join(os.path.dirname(__file__), "web", "img", "icon.svg")
 
-# Set by SIGINT/SIGTERM (Ctrl+C, logging out, shutting down): quit cleanly,
+# Set by SIGINT/SIGTERM/SIGHUP (Ctrl+C, logging out, shutting down, closing
+# the terminal it was started from): quit cleanly,
 # which also stops and saves a recording in progress.
 _quit = threading.Event()
 
@@ -207,35 +208,64 @@ def wait_for_signal():
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="audiomagic", description="Simple multi-input recorder built on PipeWire.")
     ap.add_argument("--browser", action="store_true", help="open in your web browser instead of the app window")
+    ap.add_argument("--tui", action="store_true", help="run in this terminal instead of a window")
     ap.add_argument("--no-window", action="store_true", help="just run the server and print its address")
     ap.add_argument("--port", type=int, default=0, help="local port (default: any free port)")
     ap.add_argument("--debug", action="store_true", help="verbose logging and web inspector")
     ap.add_argument("--check", action="store_true", help="check that everything needed is installed, then exit")
     ap.add_argument("--version", action="version", version=f"AudioMagic {__version__}")
     args = ap.parse_args(argv)
-    signal.signal(signal.SIGINT, _on_signal)
-    signal.signal(signal.SIGTERM, _on_signal)
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _on_signal)
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log_path = None
+    if args.tui:
+        # install.sh puts Textual in its own folder, loaded only here, so the
+        # window never depends on it
+        vendor = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vendor")
+        if os.path.isdir(vendor):
+            sys.path.insert(0, vendor)
+        try:
+            from . import tui
+        except ImportError as e:
+            print(f"The terminal interface needs Textual ({e}). Run ./install.sh again, or:\n"
+                  "  python3 -m pip install --require-hashes -r requirements-tui.txt", file=sys.stderr)
+            return 1
+        # the terminal belongs to the interface, so log to a file
+        log_path = tui.log_file(cache_dir())
+        tui.setup_logging(log_path, args.debug)
+    else:
+        logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
+                            format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     from .checks import report, run_checks
     if args.check:
         return report()
     problems, warnings, _ = run_checks()  # also loads GStreamer before anything else does
+    if args.tui:
+        warnings = [w for w in warnings if "WebKitGTK" not in w]  # no window needed
     for w in warnings:
         log.warning("%s", w)
     if problems:
         msg = "AudioMagic can't start:\n\n" + "\n".join(problems)
         print(msg, file=sys.stderr)
-        show_message("AudioMagic can't start", "\n".join(problems), error=True)
+        if not args.tui:
+            show_message("AudioMagic can't start", "\n".join(problems), error=True)
         return 1
 
     lock = single_instance()
     if lock is None:
         print("AudioMagic is already running.", file=sys.stderr)
-        show_message("AudioMagic is already running", "Switch to its window, or close it before starting it again.")
+        if not args.tui:
+            show_message("AudioMagic is already running",
+                         "Switch to its window, or close it before starting it again.")
         return 1
+
+    if args.tui:
+        try:
+            return tui.run(_quit, warnings, log_path, args.debug)
+        finally:
+            lock.close()
 
     from .engine import Engine
     from .server import Server

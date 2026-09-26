@@ -22,7 +22,7 @@ PACKAGES=(
   python3 python3-gi python3-gst-1.0 python3-numpy python3-scipy python3-aiohttp
   gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gtk-3.0 gir1.2-webkit2-4.1
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
-  gstreamer1.0-pipewire pipewire-bin ffmpeg xdg-utils
+  gstreamer1.0-pipewire pipewire-bin ffmpeg xdg-utils python3-pip
 )
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -72,6 +72,18 @@ PYTHONPATH="$APP_DIR\${PYTHONPATH:+:\$PYTHONPATH}" exec $PY -m audiomagic "\$@"
 EOF
 chmod +x "$BIN_DIR/audiomagic"
 
+# The terminal interface (audiomagic --tui) uses Textual, which is newer than
+# the distribution's package. It goes in its own folder that only the terminal
+# interface loads, so it can't affect anything else.
+say "Installing the terminal interface's libraries (Textual)"
+rm -rf "$APP_DIR/vendor"
+if ! "$PY" -m pip install --quiet --disable-pip-version-check --no-warn-script-location --only-binary=:all: \
+    --require-hashes --target "$APP_DIR/vendor" -r "$SRC/requirements-tui.txt"; then
+  rm -rf "$APP_DIR/vendor"
+  echo "Note: couldn't download Textual, so 'audiomagic --tui' won't work until you run this again online."
+  echo "      The app window is not affected."
+fi
+
 cp "$SRC/audiomagic/web/img/icon.svg" "$ICON_DIR/audiomagic.svg"
 sed "s|@BIN@|$BIN_DIR/audiomagic|" "$SRC/data/audiomagic.desktop" > "$DESKTOP_DIR/audiomagic.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
@@ -82,6 +94,7 @@ say "Checking the installation"
 
 echo
 say "Done! Open AudioMagic from your app menu, or run: audiomagic"
+echo "To use it inside a terminal instead of a window, run: audiomagic --tui"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "(To use the 'audiomagic' command, log out and back in so $BIN_DIR is on your PATH.)" ;;

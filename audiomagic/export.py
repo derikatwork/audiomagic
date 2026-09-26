@@ -77,7 +77,7 @@ def _raw_input(raw, channels):
 
 
 def loudness_cmd(raw, channels, lufs, tp):
-    return [ffmpeg_path(), "-hide_banner", "-nostats", "-y"] + _raw_input(raw, channels) + [
+    return [ffmpeg_path(), "-nostdin", "-hide_banner", "-nostats", "-y"] + _raw_input(raw, channels) + [
         "-af", f"loudnorm=I={lufs}:TP={tp}:LRA=11:print_format=json", "-f", "null", "-"]
 
 
@@ -120,8 +120,11 @@ class ExportJob:
                 p.kill()
 
     def _ffmpeg(self, cmd):
-        """Run ffmpeg at low priority (recording and the UI come first); returns its stderr."""
-        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        """Run ffmpeg at low priority (recording and the UI come first); returns its stderr.
+        Its stdin is /dev/null: given a terminal, ffmpeg reads keys from it (and
+        stops, if it is in the background), which would also steal the TUI's keys."""
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                             text=True)
         with self._lock:
             self._procs.add(p)
         try:
@@ -282,7 +285,7 @@ class ExportJob:
             filters.append(f"aresample={SAMPLE_RATE}:osf=s16:dither_method=triangular")
         else:
             filters.append(f"aresample={SAMPLE_RATE}")
-        cmd = [ffmpeg_path(), "-hide_banner", "-nostats", "-loglevel", "error", "-y"] + _raw_input(raw, ch)
+        cmd = [ffmpeg_path(), "-nostdin", "-hide_banner", "-nostats", "-loglevel", "error", "-y"] + _raw_input(raw, ch)
         cmd += ["-af", ",".join(filters)] + codec_args(fmt, quality)
         cmd += ["-ar", str(SAMPLE_RATE)]
         cmd += self._tag_args(stem_name) + [out_path]

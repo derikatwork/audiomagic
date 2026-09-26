@@ -34,7 +34,8 @@ the take, then export it as FLAC, Ogg or MP3.
   - all tracks line up in time, even from different devices
 
 It's a desktop app: it opens in its own window and runs on your computer.
-Nothing is uploaded anywhere.
+Nothing is uploaded anywhere. It also runs [inside a terminal](#in-a-terminal),
+driven from the keyboard.
 
 ## Install as a Flatpak (recommended)
 
@@ -84,12 +85,16 @@ cd audiomagic
 
 The installer asks before installing the system packages it needs
 (GStreamer, PipeWire tools, ffmpeg, WebKitGTK, NumPy/SciPy, aiohttp). It then
-puts AudioMagic in your home folder and adds it to the app menu.
+puts AudioMagic in your home folder and adds it to the app menu. For the
+[terminal interface](#in-a-terminal) it also downloads Textual, pinned to
+exact versions, into AudioMagic's own folder, where nothing else uses it.
 
 To remove it later, run `./uninstall.sh`. Your recordings are kept.
 
 To run it straight from the source folder without installing:
 `python3 -m audiomagic`. To see whether anything is missing: `python3 -m audiomagic --check`.
+For the terminal interface from the source folder, first run
+`python3 -m pip install --target vendor --require-hashes -r requirements-tui.txt`.
 
 ## Using it
 
@@ -161,6 +166,39 @@ delay while performing, use your interface's direct monitoring.
 | Home / End | Jump to start / end |
 | Esc | Clear the selection |
 
+## In a terminal
+
+AudioMagic also runs inside a terminal, driven from the keyboard. It's the same
+app underneath, with the same projects, recordings, effects and export. It
+needs no display, so it also works on a recording machine you reach over SSH.
+
+```bash
+audiomagic --tui
+flatpak run io.github.derikatwork.AudioMagic --tui     # the Flatpak
+```
+
+![AudioMagic in a terminal](docs/screenshots/terminal.png)
+
+The top half lists the inputs, each with its meter and mixer controls. The
+bottom half shows a take as a waveform, with a cursor and a selection for
+editing. **Tab** switches between them. The bottom line lists the main keys
+for the half you're in, and **?** shows them all:
+
+| Where | Keys |
+|---|---|
+| Anywhere | `r` record / stop · `space` play from the cursor / stop · `p` pause · `[` `]` previous / next take · `i` add an input · `x` export · `o` projects · `d` output device · `?` help · `q` or `Ctrl`+`C` quit |
+| Inputs | `↑` `↓` pick (the last row is the master level) · `a` arm · `m` mute · `s` solo · `h` hear (monitor) · `+` `-` level · `←` `→` pan · `e` effects · `c` change the source · `n` rename · `Del` remove |
+| Timeline | `←` `→` move the cursor · `Shift`+`←` `→` select · `↑` `↓` pick a track · `c` or `Del` cut · `k` keep only the selection · `z` silence on the picked track · `N` normalize it · `f` fades · `u` / `U` undo / redo · `+` `-` `0` zoom in / out / fit · `n` / `D` rename / delete the take |
+
+The mouse works too: click the timeline to move the cursor and drag to
+select. Quitting while recording asks first, and a recording is always saved,
+even when the terminal is closed.
+
+Only one copy of AudioMagic runs at a time, so close the window before
+starting it in a terminal. Messages that would otherwise land in the terminal
+go to `~/.cache/audiomagic/tui.log` (in the Flatpak,
+`~/.var/app/io.github.derikatwork.AudioMagic/cache/audiomagic/tui.log`).
+
 ## Where things are saved
 
 ```
@@ -192,6 +230,8 @@ restored. Settings live in `~/.config/audiomagic/`.
   finished files). Free some space or choose another folder.
 - **No window, it opened in the browser.** WebKitGTK is missing:
   `sudo apt install gir1.2-webkit2-4.1`. Or run `audiomagic --browser` on purpose.
+- **`audiomagic --tui` says it needs Textual.** Run `./install.sh` again
+  while online; it downloads Textual for the terminal interface.
 - **Something else.** Run `audiomagic --check`, and `audiomagic --debug` for
   detailed logs.
 
@@ -204,6 +244,7 @@ restored. Settings live in `~/.config/audiomagic/`.
 | Effects | Written in NumPy/SciPy, so live monitoring, playback and export sound identical. |
 | Export | ffmpeg: encoding, tags and two-pass loudness normalization. |
 | Interface | A local web page (HTML/JS, no build step) in a GTK WebKit window. The server listens only on 127.0.0.1 and every request needs a per-launch secret key. |
+| Terminal interface | [Textual](https://textual.textualize.io). It drives the same engine directly, in the same process, with no local server. |
 
 Code map (`audiomagic/`):
 
@@ -217,6 +258,7 @@ Code map (`audiomagic/`):
 | `export.py` | Export |
 | `server.py` | Local API |
 | `app.py` | Window and start-up |
+| `tui.py` | The terminal interface |
 | `web/` | The interface |
 
 ### Tests
@@ -233,13 +275,19 @@ inputs, monitoring, playback, edits and every export format.
 single sample is lost, even when Python stalls for most of a second.
 `test_qa.py` covers edge cases: fuzzed edits, awkward file names, crashes and a
 full disk during recording, cancelled exports and malformed API requests.
+`test_tui.py` drives the terminal interface key by key through Textual's test
+pilot: adding inputs, the mixer, effects, recording, every kind of edit,
+playback, export and projects. It also runs it once in a real
+pseudo-terminal and stops it with SIGTERM mid-recording; the take must be
+saved.
 [docs/QA-REPORT.md](docs/QA-REPORT.md) has the results of the longer stress runs.
 
 The Flatpak (`flatpak/`) is built on every push by
 `.github/workflows/flatpak.yml`, which then installs it on a clean machine
 and runs `flatpak/smoke_test.py`: it records from virtual devices, monitors,
 plays back and exports every format from inside the sandbox, and opens the
-window on a virtual display.
+window on a virtual display. `flatpak/tui_smoke_test.py` then runs the
+terminal interface from the sandbox: it adds an input, records and quits.
 
 ## Not yet
 

@@ -74,6 +74,21 @@ Found later, while packaging the Flatpak (fixed):
   waits for inputs that are still catching up (up to 4 s), but not for one
   that has gone quiet.
 
+Found while building the terminal interface (fixed; they affected the window
+too):
+
+- **Closing the terminal AudioMagic was started from killed it mid-recording.**
+  The terminal sends SIGHUP, which ended the program on the spot; the take
+  was left unfinished until the project was next opened. SIGHUP now quits
+  cleanly like Ctrl+C and logging out do, so the recording is stopped and
+  saved (`tests/test_tui.py` closes the terminal during a take).
+- **ffmpeg could hang or steal keystrokes.** Started without `-nostdin`,
+  ffmpeg reads commands from the terminal it inherits. With the app running
+  in the background of a shell, the export stopped (the terminal suspends
+  background readers); with the terminal interface, it would have competed
+  for the keyboard. ffmpeg and every other helper now get `/dev/null` as
+  input.
+
 Other bugs:
 
 5. Exporting with every track muted exported *all* of them.

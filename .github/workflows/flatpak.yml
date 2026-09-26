@@ -95,6 +95,9 @@ jobs:
       - name: Record, monitor, play and export inside the sandbox
         run: python3 flatpak/smoke_test.py
 
+      - name: Terminal interface inside the sandbox
+        run: python3 flatpak/tui_smoke_test.py
+
       - name: Open the window (virtual display)
         run: |
           Xvfb :99 -screen 0 1400x900x24 &

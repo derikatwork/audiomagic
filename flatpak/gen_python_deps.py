@@ -13,7 +13,7 @@ import sys
 import tempfile
 import urllib.request
 
-PACKAGES = ["numpy==2.5.3", "scipy==1.18.1", "aiohttp==3.14.3"]
+PACKAGES = ["numpy==2.5.3", "scipy==1.18.1", "aiohttp==3.14.3", "textual==8.2.8"]
 PYTHONS = ["3.12", "3.13", "3.14"]
 PLATFORMS = ["manylinux_2_28_x86_64", "manylinux_2_27_x86_64", "manylinux_2_17_x86_64", "manylinux2014_x86_64"]
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "python-deps.json")
@@ -48,6 +48,7 @@ def main():
             "pip3 install --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} --no-build-isolation "
             + " ".join(names)
         ],
+        "cleanup": ["/bin"],  # the packages' command-line tools (f2py, pygmentize, …) aren't needed
         "sources": [pypi_file(f) for f in files],
     }
     with open(OUT, "w") as f:

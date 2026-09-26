@@ -261,7 +261,8 @@ class Server:
         opener = shutil.which("xdg-open")
         if not opener:
             raise UserError(f"Can't open folders here. The files are in {path}")
-        subprocess.Popen([opener, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.Popen([opener, path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
         return web.json_response({"ok": True})
 
     # ------------------------------------------------------------ websocket
