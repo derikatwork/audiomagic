@@ -49,7 +49,8 @@ def run_checks():
         from .pw import snapshot
         graph = snapshot()
         if not graph.ok:
-            problems.append("PipeWire is not running for this user (check: systemctl --user status pipewire)")
+            problems.append(f"Can't reach PipeWire ({graph.error}). Is it running? "
+                            "Check with: systemctl --user status pipewire")
         else:
             info.append(f"PipeWire {graph.version or '(unknown version)'}")
             try:

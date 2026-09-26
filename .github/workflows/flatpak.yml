@@ -35,7 +35,8 @@ jobs:
       - name: GNOME runtimes on Flathub
         run: flatpak remote-ls --user --runtime --columns=application,branch flathub | grep -E '^org\.gnome\.Platform\s' | sort -V | tail -5
 
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cache
         with:
           path: .flatpak-builder
           key: flatpak-builder-${{ hashFiles('flatpak/*.yml', 'flatpak/*.json') }}
@@ -48,6 +49,13 @@ jobs:
           flatpak build-bundle repo AudioMagic.flatpak "$APP_ID" \
             --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
           ls -la AudioMagic.flatpak
+
+      # saved even when a later step fails, so the next run doesn't rebuild ffmpeg and PipeWire
+      - uses: actions/cache/save@v4
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: .flatpak-builder
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -72,7 +80,11 @@ jobs:
           pw-cli info 0 | grep -m1 version
 
       - name: Check inside the sandbox
-        run: flatpak run "$APP_ID" --check
+        run: |
+          flatpak run --command=sh "$APP_ID" -c 'echo "runtime dir: $XDG_RUNTIME_DIR"; ls -la "$XDG_RUNTIME_DIR";
+            pw-dump --no-colors > /tmp/dump.json; echo "pw-dump exit $?"; head -c 300 /tmp/dump.json; echo' || true
+          flatpak run --command=python3 "$APP_ID" -c 'import gi; gi.require_version("Gst", "1.0"); from gi.repository import Gst; Gst.init(None); print({e: bool(Gst.ElementFactory.find(e)) for e in "srtsrc tsdemux aacparse avdec_aac opusdec souphttpsrc hlsdemux uridecodebin pipewiresrc pulsesink".split()})' || true
+          flatpak run "$APP_ID" --check
 
       - name: Record, monitor, play and export inside the sandbox
         run: python3 flatpak/smoke_test.py

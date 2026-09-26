@@ -176,6 +176,9 @@ def snapshot(timeout=4.0):
         return parse_dump(decode_dump(out.decode("utf-8", "replace")))
     except FileNotFoundError:
         return Graph(ok=False, error="pw-dump not found (install pipewire-bin)")
+    except subprocess.CalledProcessError as e:
+        lines = (e.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        return Graph(ok=False, error=f"pw-dump failed: {lines[-1] if lines else f'exit code {e.returncode}'}")
     except (subprocess.SubprocessError, ValueError) as e:
         return Graph(ok=False, error=f"could not read the PipeWire graph: {e}")
 
